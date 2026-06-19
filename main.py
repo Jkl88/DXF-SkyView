@@ -7,9 +7,16 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
+from skyview.integration.file_association import ensure_dxf_file_icon
 from skyview.main_window import MainWindow
+from skyview.resources import app_icon
+from skyview.settings_store import load_theme_mode
 from skyview.ui.theme import apply_theme
-from skyview.updater import APPLY_UPDATE_FLAG, apply_downloaded_update, cleanup_stale_new_exe
+from skyview.updater import (
+    APPLY_UPDATE_FLAG,
+    apply_downloaded_update,
+    cleanup_stale_new_exe,
+)
 
 
 def _handle_apply_update_argv() -> bool:
@@ -33,9 +40,16 @@ def main() -> int:
     app.setApplicationName("DXF SkyView")
     app.setOrganizationName("SkyView")
 
-    dark = apply_theme(app)
+    icon = app_icon()
+    if not icon.isNull():
+        app.setWindowIcon(icon)
 
-    window = MainWindow(dark=dark)
+    ensure_dxf_file_icon()
+
+    theme_mode = load_theme_mode()
+    dark = apply_theme(app, theme_mode)
+
+    window = MainWindow(dark=dark, theme_mode=theme_mode)
     window.show()
 
     if len(sys.argv) > 1:

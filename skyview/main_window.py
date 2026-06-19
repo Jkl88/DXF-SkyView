@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, QSize, QTimer
-from PySide6.QtGui import QAction, QDragEnterEvent, QDragMoveEvent, QDropEvent, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QDragEnterEvent, QDragMoveEvent, QDropEvent, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -27,11 +27,24 @@ from skyview.settings_store import (
     last_open_dir,
     load_snap_enabled,
     load_snap_priority,
+    load_theme_mode,
     save_snap_enabled,
     save_snap_priority,
+    save_theme_mode,
     set_last_open_dir,
+    THEME_DARK,
+    THEME_LIGHT,
+    THEME_SYSTEM,
 )
-from skyview.integration import import_dxf, is_rectangle_creator_available
+from skyview.integration import (
+    ensure_dxf_file_icon,
+    import_dxf,
+    is_dxf_associated,
+    is_rectangle_creator_available,
+    register_dxf_association,
+    unregister_dxf_association,
+)
+from skyview.resources import app_icon
 from skyview.tools.snap import SnapMode, SnapSettings
 from skyview.ui.about_dialog import AboutDialog
 from skyview.ui.properties_panel import PropertiesPanel
@@ -45,16 +58,19 @@ from skyview.updater import (
     perform_update,
     should_offer_update,
 )
+from skyview.ui.theme import set_theme_mode, toolbar_icon_color
+
+
 from skyview.version import APP_NAME, APP_VERSION
 
 
-def _make_measure_icon() -> QIcon:
+def _make_measure_icon(dark: bool = True) -> QIcon:
     pix = QPixmap(24, 24)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     pen = p.pen()
-    pen.setColor(Qt.GlobalColor.white)
+    pen.setColor(toolbar_icon_color(dark))
     pen.setWidthF(1.8)
     p.setPen(pen)
     p.drawLine(4, 20, 20, 4)
@@ -66,13 +82,13 @@ def _make_measure_icon() -> QIcon:
     return QIcon(pix)
 
 
-def _make_edit_icon() -> QIcon:
+def _make_edit_icon(dark: bool = True) -> QIcon:
     pix = QPixmap(24, 24)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     pen = p.pen()
-    pen.setColor(Qt.GlobalColor.white)
+    pen.setColor(toolbar_icon_color(dark))
     pen.setWidthF(1.8)
     p.setPen(pen)
     p.drawLine(6, 18, 18, 6)
@@ -85,11 +101,18 @@ def _make_edit_icon() -> QIcon:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, dark: bool = True):
+    def __init__(self, dark: bool = True, theme_mode: str = THEME_SYSTEM):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.resize(1280, 800)
         self.setAcceptDrops(True)
+
+        window_icon = app_icon()
+        if not window_icon.isNull():
+            self.setWindowIcon(window_icon)
+
+        self._theme_mode = theme_mode
+        self._dark = dark
 
         self._snap_settings = self._load_snap_settings()
         self._current_doc: DxfDocument | None = None
@@ -159,6 +182,14 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        self._assoc_act = QAction("Открывать .dxf через SkyView", self)
+        self._assoc_act.setCheckable(True)
+        self._assoc_act.setChecked(is_dxf_associated())
+        self._assoc_act.triggered.connect(self._toggle_dxf_association)
+        file_menu.addAction(self._assoc_act)
+
+        file_menu.addSeparator()
+
         exit_act = QAction("Выход", self)
         exit_act.setShortcut(QKeySequence.StandardKey.Quit)
         exit_act.triggered.connect(self.close)
@@ -179,6 +210,24 @@ class MainWindow(QMainWindow):
         snap_act.triggered.connect(self._open_snap_settings)
         view_menu.addAction(snap_act)
 
+        view_menu.addSeparator()
+        theme_menu = view_menu.addMenu("Тема")
+        self._theme_actions: dict[str, QAction] = {}
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+        for mode, label in (
+            (THEME_SYSTEM, "Системная"),
+            (THEME_LIGHT, "Светлая"),
+            (THEME_DARK, "Тёмная"),
+        ):
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setChecked(mode == self._theme_mode)
+            theme_group.addAction(act)
+            act.triggered.connect(lambda _checked=False, m=mode: self._set_theme_mode(m))
+            theme_menu.addAction(act)
+            self._theme_actions[mode] = act
+
         help_menu = menu.addMenu("Справка")
         check_updates_act = QAction("Проверить обновления…", self)
         check_updates_act.triggered.connect(self._check_updates_manual)
@@ -194,7 +243,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
 
         self._measure_btn = QToolButton()
-        self._measure_btn.setIcon(_make_measure_icon())
+        self._measure_btn.setIcon(_make_measure_icon(self._dark))
         self._measure_btn.setToolTip("Измерить")
         self._measure_btn.setCheckable(True)
         self._measure_btn.clicked.connect(self._toggle_measure)
@@ -202,7 +251,7 @@ class MainWindow(QMainWindow):
 
         if is_rectangle_creator_available():
             self._edit_btn = QToolButton()
-            self._edit_btn.setIcon(_make_edit_icon())
+            self._edit_btn.setIcon(_make_edit_icon(self._dark))
             self._edit_btn.setToolTip("Редактировать в DXF Rectangle Creator")
             self._edit_btn.clicked.connect(self._open_in_editor)
             toolbar.addWidget(self._edit_btn)
@@ -221,6 +270,49 @@ class MainWindow(QMainWindow):
         self._canvas.document_modified.connect(self._on_document_modified)
         self._canvas.file_dropped.connect(self._open_dropped_file)
         self._canvas.measure_exit_requested.connect(self._exit_measure_mode)
+        app = QApplication.instance()
+        if app is not None:
+            app.styleHints().colorSchemeChanged.connect(self._on_system_theme_changed)
+
+    def _toggle_dxf_association(self, checked: bool) -> None:
+        if checked:
+            ok, message = register_dxf_association()
+        else:
+            ok, message = unregister_dxf_association()
+        self._assoc_act.blockSignals(True)
+        self._assoc_act.setChecked(is_dxf_associated())
+        self._assoc_act.blockSignals(False)
+        if ok and checked:
+            ensure_dxf_file_icon()
+        if ok:
+            QMessageBox.information(self, "Ассоциация файлов", message)
+        else:
+            QMessageBox.warning(self, "Ассоциация файлов", message)
+
+    def _on_system_theme_changed(self, _scheme) -> None:
+        if self._theme_mode == THEME_SYSTEM:
+            self._apply_theme(THEME_SYSTEM)
+
+    def _set_theme_mode(self, mode: str) -> None:
+        if mode == self._theme_mode:
+            for key, act in self._theme_actions.items():
+                act.setChecked(key == mode)
+            return
+        self._apply_theme(mode)
+
+    def _apply_theme(self, mode: str) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        self._theme_mode = mode
+        save_theme_mode(mode)
+        self._dark = set_theme_mode(app, mode)
+        for key, act in self._theme_actions.items():
+            act.setChecked(key == mode)
+        self._canvas.set_dark_mode(self._dark)
+        self._measure_btn.setIcon(_make_measure_icon(self._dark))
+        if self._edit_btn is not None:
+            self._edit_btn.setIcon(_make_edit_icon(self._dark))
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

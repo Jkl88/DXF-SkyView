@@ -1,10 +1,20 @@
-"""Тема оформления (светлая/тёмная по системе)."""
+"""Тема оформления (светлая / тёмная / по системе)."""
 
 from __future__ import annotations
+
+from enum import Enum
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
+
+from skyview.settings_store import load_theme_mode, save_theme_mode
+
+
+class ThemeMode(str, Enum):
+    SYSTEM = "system"
+    LIGHT = "light"
+    DARK = "dark"
 
 
 DARK_STYLE = """
@@ -67,6 +77,17 @@ QLabel#panelTitle {
     color: #89b4fa;
     font-weight: 600;
     font-size: 12px;
+}
+QLabel#mutedLabel {
+    color: #a6adc8;
+}
+QLabel#aboutVersion {
+    color: #89b4fa;
+    font-size: 14px;
+}
+QLabel#aboutAuthor {
+    color: #a6adc8;
+    margin-top: 8px;
 }
 QTableWidget {
     background-color: #1e1e2e;
@@ -171,6 +192,17 @@ QLabel#panelTitle {
     font-weight: 600;
     font-size: 12px;
 }
+QLabel#mutedLabel {
+    color: #6c6f85;
+}
+QLabel#aboutVersion {
+    color: #1e66f5;
+    font-size: 14px;
+}
+QLabel#aboutAuthor {
+    color: #6c6f85;
+    margin-top: 8px;
+}
 QTableWidget {
     background-color: #eff1f5;
     alternate-background-color: #e6e9ef;
@@ -214,7 +246,7 @@ QPushButton:default {
 """
 
 
-def is_dark_mode() -> bool:
+def is_system_dark() -> bool:
     app = QApplication.instance()
     if app is None:
         return True
@@ -224,17 +256,97 @@ def is_dark_mode() -> bool:
         return True
     if scheme == Qt.ColorScheme.Light:
         return False
-    # Fallback: яркость фона палитры
     bg = app.palette().color(QPalette.ColorRole.Window)
     return bg.lightness() < 128
 
 
-def apply_theme(app: QApplication) -> bool:
+def resolve_is_dark(mode: str | ThemeMode | None = None) -> bool:
+    if mode is None:
+        mode = load_theme_mode()
+    if isinstance(mode, ThemeMode):
+        mode = mode.value
+    if mode == ThemeMode.LIGHT.value:
+        return False
+    if mode == ThemeMode.DARK.value:
+        return True
+    return is_system_dark()
+
+
+def is_dark_mode() -> bool:
+    """Текущая активная тема (с учётом настройки пользователя)."""
+    return resolve_is_dark()
+
+
+def apply_theme(app: QApplication, mode: str | ThemeMode | None = None) -> bool:
     """Применить тему. Возвращает True если тёмная."""
-    dark = is_dark_mode()
+    if mode is None:
+        mode = load_theme_mode()
+    if isinstance(mode, ThemeMode):
+        mode = mode.value
+    dark = resolve_is_dark(mode)
     app.setStyleSheet(DARK_STYLE if dark else LIGHT_STYLE)
     return dark
 
 
-def canvas_background() -> QColor:
-    return QColor(30, 30, 46) if is_dark_mode() else QColor(250, 250, 252)
+def set_theme_mode(app: QApplication, mode: str | ThemeMode) -> bool:
+    """Сохранить и применить режим темы. Возвращает True если тёмная."""
+    if isinstance(mode, ThemeMode):
+        mode = mode.value
+    save_theme_mode(mode)
+    return apply_theme(app, mode)
+
+
+def canvas_background(dark: bool | None = None) -> QColor:
+    if dark is None:
+        dark = is_dark_mode()
+    return QColor(30, 30, 46) if dark else QColor(250, 250, 252)
+
+
+def overlay_line_color(dark: bool | None = None) -> QColor:
+    if dark is None:
+        dark = is_dark_mode()
+    return QColor(200, 200, 200) if dark else QColor(80, 85, 100)
+
+
+def overlay_text_color(dark: bool | None = None) -> QColor:
+    if dark is None:
+        dark = is_dark_mode()
+    return QColor(220, 220, 220) if dark else QColor(60, 64, 80)
+
+
+def guide_line_color(dark: bool | None = None) -> QColor:
+    if dark is None:
+        dark = is_dark_mode()
+    return QColor(210, 210, 210, 220) if dark else QColor(90, 95, 110, 220)
+
+
+def toolbar_icon_color(dark: bool | None = None) -> QColor:
+    if dark is None:
+        dark = is_dark_mode()
+    return QColor(235, 235, 240) if dark else QColor(50, 54, 70)
+
+
+def adjust_entity_color(color: QColor, dark: bool | None = None) -> QColor:
+    """Подстроить цвет объекта под фон (ACI 7 = белый/чёрный)."""
+    if dark is None:
+        dark = is_dark_mode()
+    if dark:
+        return color
+
+    lum = color.lightness()
+    if lum >= 240:
+        return QColor(28, 32, 40)
+    if lum >= 200:
+        factor = 0.35
+        return QColor(
+            max(50, int(color.red() * factor)),
+            max(50, int(color.green() * factor)),
+            max(50, int(color.blue() * factor)),
+        )
+    if lum >= 170 and color.saturation() < 40:
+        return QColor(
+            max(60, int(color.red() * 0.55)),
+            max(60, int(color.green() * 0.55)),
+            max(60, int(color.blue() * 0.55)),
+        )
+    return color

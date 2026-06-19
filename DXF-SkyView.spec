@@ -5,10 +5,13 @@ from pathlib import Path
 
 ROOT = Path(SPECPATH)
 LOGO = ROOT / "АКОЛЕД.png"
+APP_ICON = ROOT / "DXF.ico"
+FILE_ICON = ROOT / "DXFfile.ico"
 
 datas = []
-if LOGO.is_file():
-    datas.append((str(LOGO), "."))
+for asset in (LOGO, ROOT / "DXF.png", FILE_ICON):
+    if asset.is_file():
+        datas.append((str(asset), "."))
 
 block_cipher = None
 
@@ -75,4 +78,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(APP_ICON) if APP_ICON.is_file() else None,
 )

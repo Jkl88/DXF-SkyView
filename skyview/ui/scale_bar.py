@@ -5,10 +5,11 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from skyview.dxf.units import format_length
+from skyview.ui.theme import overlay_line_color, overlay_text_color
 
 
 def _nice_scale_length(raw: float) -> float:
@@ -27,13 +28,18 @@ def _nice_scale_length(raw: float) -> float:
 
 
 class ScaleBarWidget(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, dark: bool = True):
         super().__init__(parent)
+        self._dark = dark
         self._unit = "mm"
         self._pixels_per_unit = 1.0
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedHeight(36)
+
+    def set_dark_mode(self, dark: bool) -> None:
+        self._dark = dark
+        self.update()
 
     def set_scale(self, pixels_per_unit: float, unit: str) -> None:
         self._pixels_per_unit = max(pixels_per_unit, 1e-9)
@@ -60,7 +66,7 @@ class ScaleBarWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        pen = QPen(QColor(200, 200, 200), 2)
+        pen = QPen(overlay_line_color(self._dark), 2)
         p.setPen(pen)
         p.drawLine(int(x0), int(y0), int(x0 + bar_px), int(y0))
         p.drawLine(int(x0), int(y0 - 4), int(x0), int(y0 + 4))
@@ -69,7 +75,7 @@ class ScaleBarWidget(QWidget):
         label = format_length(bar_units, self._unit, precision=0 if bar_units >= 10 else 1)
         font = QFont("Segoe UI", 9)
         p.setFont(font)
-        p.setPen(QColor(220, 220, 220))
+        p.setPen(overlay_text_color(self._dark))
         tw = p.fontMetrics().horizontalAdvance(label)
         p.drawText(int(x0 + (bar_px - tw) / 2), int(y0 - 6), label)
         p.end()

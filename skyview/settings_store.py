@@ -9,8 +9,26 @@ from PySide6.QtCore import QSettings
 from skyview.tools.snap import DEFAULT_SNAP_PRIORITY, SnapMode
 
 
+THEME_SYSTEM = "system"
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
+THEME_MODES = frozenset({THEME_SYSTEM, THEME_LIGHT, THEME_DARK})
+
+
 def _settings() -> QSettings:
     return QSettings()
+
+
+def load_theme_mode() -> str:
+    value = _settings().value("ui/theme", THEME_SYSTEM)
+    if isinstance(value, str) and value in THEME_MODES:
+        return value
+    return THEME_SYSTEM
+
+
+def save_theme_mode(mode: str) -> None:
+    if mode in THEME_MODES:
+        _settings().setValue("ui/theme", mode)
 
 
 def last_open_dir() -> str:

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem
 
 from skyview.canvas.screen_overlay import draw_screen_diamond
 from skyview.dxf.loader import EntityRecord, make_pen
+from skyview.ui.theme import adjust_entity_color, guide_line_color
 from skyview.dxf.segments import nearest_pick_distance
 
 _OUTLINE_ONLY_TYPES = frozenset({"LWPOLYLINE", "POLYLINE"})
@@ -19,12 +20,13 @@ class DxfPathItem(QGraphicsPathItem):
 
     TYPE = "dxf_entity"
 
-    def __init__(self, record: EntityRecord):
+    def __init__(self, record: EntityRecord, dark: bool = True):
         super().__init__(record.path)
         self.record = record
+        self._dark = dark
         self._selected = False
         self._snap_highlight: str | None = None
-        self._base_color = record.color
+        self._base_color = adjust_entity_color(record.color, dark)
         self._cached_shape = None
         self.setPen(make_pen(self._base_color, 1.0))
         self.setBrush(Qt.BrushStyle.NoBrush)
@@ -40,6 +42,12 @@ class DxfPathItem(QGraphicsPathItem):
 
     def set_snap_highlight(self, kind: str | None) -> None:
         self._snap_highlight = kind
+        self._apply_pen()
+        self.update()
+
+    def set_dark_mode(self, dark: bool) -> None:
+        self._dark = dark
+        self._base_color = adjust_entity_color(self.record.color, dark)
         self._apply_pen()
         self.update()
 
@@ -105,13 +113,18 @@ class DxfPathItem(QGraphicsPathItem):
 class SnapMarkerItem(QGraphicsItem):
     """Маркер активной привязки — фиксированный жёлтый ромб."""
 
-    def __init__(self):
+    def __init__(self, dark: bool = True):
         super().__init__()
+        self._dark = dark
         self.setZValue(999)
         self.setVisible(False)
         self._scene_pos = None
         self._apparent_inter: QPointF | None = None
         self._apparent_lines: tuple[QPointF, QPointF, QPointF, QPointF] | None = None
+
+    def set_dark_mode(self, dark: bool) -> None:
+        self._dark = dark
+        self.update()
 
     def show_at(self, x: float, y: float) -> None:
         from PySide6.QtCore import QPointF
@@ -157,7 +170,7 @@ class SnapMarkerItem(QGraphicsItem):
             from skyview.tools.measure_context import apparent_guide_segment
 
             la1, lb1, la2, lb2 = self._apparent_lines
-            pen = QPen(QColor(210, 210, 210, 220), 1.0)
+            pen = QPen(guide_line_color(self._dark), 1.0)
             pen.setStyle(Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
             painter.setPen(pen)

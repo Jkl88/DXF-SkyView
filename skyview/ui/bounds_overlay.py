@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from skyview.dxf.units import format_length
-
-LINE_COLOR = QColor(200, 200, 200)
-TEXT_COLOR = QColor(220, 220, 220)
+from skyview.ui.theme import overlay_line_color, overlay_text_color
 
 
 class BoundsOverlayWidget(QWidget):
     MARGIN = 10
     TICK = 5
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, dark: bool = True):
         super().__init__(parent)
+        self._dark = dark
         self._visible = False
         self._width = 0.0
         self._height = 0.0
@@ -25,6 +24,10 @@ class BoundsOverlayWidget(QWidget):
         self._proj = QRectF()
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+    def set_dark_mode(self, dark: bool) -> None:
+        self._dark = dark
+        self.update()
 
     def set_state(
         self,
@@ -55,7 +58,7 @@ class BoundsOverlayWidget(QWidget):
 
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(LINE_COLOR, 2)
+        pen = QPen(overlay_line_color(self._dark), 2)
         p.setPen(pen)
 
         p.drawLine(int(x1), int(y_top), int(x2), int(y_top))
@@ -68,7 +71,7 @@ class BoundsOverlayWidget(QWidget):
 
         font = QFont("Segoe UI", 9)
         p.setFont(font)
-        p.setPen(TEXT_COLOR)
+        p.setPen(overlay_text_color(self._dark))
 
         w_label = format_length(self._width, self._unit)
         fm = p.fontMetrics()

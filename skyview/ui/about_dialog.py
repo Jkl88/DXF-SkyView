@@ -40,8 +40,8 @@ class AboutDialog(QDialog):
         layout.addWidget(title)
 
         version = QLabel(f"Версия {APP_VERSION}")
+        version.setObjectName("aboutVersion")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        version.setStyleSheet("color: #89b4fa; font-size: 14px;")
         layout.addWidget(version)
 
         desc = QLabel(APP_DESCRIPTION)
@@ -50,8 +50,8 @@ class AboutDialog(QDialog):
         layout.addWidget(desc)
 
         author = QLabel(f"Автор: {APP_AUTHOR}")
+        author.setObjectName("aboutAuthor")
         author.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        author.setStyleSheet("color: #a6adc8; margin-top: 8px;")
         layout.addWidget(author)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)

@@ -59,7 +59,7 @@ class PropertiesPanel(QFrame):
         title = QLabel("Свойства объекта")
         title.setObjectName("panelTitle")
         self._count_label = QLabel("")
-        self._count_label.setStyleSheet("color: #a6adc8;")
+        self._count_label.setObjectName("mutedLabel")
         header.addWidget(title)
         header.addStretch()
         header.addWidget(self._count_label)

@@ -28,7 +28,8 @@ from skyview.ui.theme import canvas_background
 class DxfScene(QGraphicsScene):
     def __init__(self, dark: bool = True):
         super().__init__()
-        self.setBackgroundBrush(canvas_background())
+        self._dark = dark
+        self.setBackgroundBrush(canvas_background(dark))
         self.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.BspTreeIndex)
         self._items: list[DxfPathItem] = []
         self._selected: set[DxfPathItem] = set()
@@ -72,7 +73,7 @@ class DxfScene(QGraphicsScene):
     def add_records(self, records) -> list[DxfPathItem]:
         items = []
         for rec in records:
-            item = DxfPathItem(rec)
+            item = DxfPathItem(rec, dark=self._dark)
             self.addItem(item)
             items.append(item)
         self._items = items
@@ -85,12 +86,18 @@ class DxfScene(QGraphicsScene):
     def restore_records(self, records: list[EntityRecord]) -> list[DxfPathItem]:
         restored = []
         for rec in records:
-            item = DxfPathItem(rec)
+            item = DxfPathItem(rec, dark=self._dark)
             self.addItem(item)
             self._items.append(item)
             restored.append(item)
         self._records_cache = None
         return restored
+
+    def set_dark_mode(self, dark: bool) -> None:
+        self._dark = dark
+        self.setBackgroundBrush(canvas_background(dark))
+        for item in self._items:
+            item.set_dark_mode(dark)
 
     def all_records(self) -> list[EntityRecord]:
         if self._records_cache is None:
@@ -177,7 +184,7 @@ class DxfCanvas(QGraphicsView):
         self._doc: DxfDocument | None = None
         self._tool = "select"  # select | measure
         self._measure: MeasureOverlay | None = None
-        self._snap_marker = SnapMarkerItem()
+        self._snap_marker = SnapMarkerItem(dark)
         self._last_snap_result = None
 
         self._scene = DxfScene(dark)
@@ -196,8 +203,8 @@ class DxfCanvas(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setAcceptDrops(True)
 
-        self._scale_bar = ScaleBarWidget(self.viewport())
-        self._bounds_overlay = BoundsOverlayWidget(self.viewport())
+        self._scale_bar = ScaleBarWidget(self.viewport(), dark=self._dark)
+        self._bounds_overlay = BoundsOverlayWidget(self.viewport(), dark=self._dark)
         self._bounds_overlay.raise_()
         self._scale_bar.raise_()
 
@@ -241,6 +248,16 @@ class DxfCanvas(QGraphicsView):
         if settings is not None:
             self._snap_settings = settings
         self._snap_engine.settings = self._snap_settings
+
+    def set_dark_mode(self, dark: bool) -> None:
+        if self._dark == dark:
+            return
+        self._dark = dark
+        self._scene.set_dark_mode(dark)
+        self._snap_marker.set_dark_mode(dark)
+        self._scale_bar.set_dark_mode(dark)
+        self._bounds_overlay.set_dark_mode(dark)
+        self.viewport().update()
 
     def fit_to_view(self) -> None:
         rect = self._scene.content_bounding_rect()

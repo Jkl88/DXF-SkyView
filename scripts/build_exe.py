@@ -39,6 +39,12 @@ def main() -> int:
     if not logo.is_file():
         print(f"Предупреждение: не найден логотип {logo.name}")
 
+    print("Иконки...")
+    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "make_icons.py")], cwd=ROOT)
+    if result.returncode != 0:
+        print("Ошибка: не удалось создать .ico из PNG.")
+        return 1
+
     if DIST_DIR.exists():
         shutil.rmtree(DIST_DIR)
     if BUILD_DIR.exists():
@@ -65,8 +71,8 @@ def main() -> int:
     print(f"  Файл: {DIST_EXE}")
     print(f"  Размер: {size_mb:.1f} МБ")
     print()
-    print("Скопируйте DXF-SkyView.exe на другой компьютер и запустите.")
-    print("Python на целевой машине не нужен.")
+    print("Скопируйте DXF-SkyView.exe на другой компьютер.")
+    print("Иконка для .dxf вшита в exe (извлекается при ассоциации).")
     return 0
 
 
