@@ -32,6 +32,15 @@ def dxf_extents_to_scene_rect(
     return QRectF(min_x, -max_y, width, height)
 
 
+def entity_scene_bounds(entity: DXFEntity) -> QRectF:
+    """Габарит одной сущности в координатах сцены."""
+    box = bbox.extents([entity])
+    if not box.has_data:
+        return QRectF()
+    mn, mx = box.extmin, box.extmax
+    return dxf_extents_to_scene_rect((mn.x, mn.y, mx.x, mx.y))
+
+
 def records_scene_bounds(records) -> QRectF:
     extents = records_dxf_extents(records)
     if extents is None:

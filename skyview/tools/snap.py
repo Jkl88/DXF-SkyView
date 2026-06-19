@@ -9,7 +9,7 @@ from enum import Enum, auto
 from PySide6.QtCore import QPointF, QRectF
 
 from skyview.dxf.loader import EntityRecord
-from skyview.dxf.segments import collect_line_segments_for_entity, nearest_on_segment
+from skyview.dxf.segments import nearest_on_segment, snap_line_segments
 
 
 class SnapMode(Enum):
@@ -234,9 +234,26 @@ def _point_on_segment(point: QPointF, a: QPointF, b: QPointF, tol: float = 1e-4)
 
 
 def _collect_line_segments(record: EntityRecord) -> list[tuple[QPointF, QPointF]]:
-    if record.pick_segments:
-        return record.pick_segments
-    return collect_line_segments_for_entity(record.entity)
+    return snap_line_segments(record)
+
+
+def _segment_length_sq(a: QPointF, b: QPointF) -> float:
+    dx = b.x() - a.x()
+    dy = b.y() - a.y()
+    return dx * dx + dy * dy
+
+
+def _segments_share_endpoint(
+    a1: QPointF, a2: QPointF, b1: QPointF, b2: QPointF, tol: float
+) -> bool:
+    tol_sq = tol * tol
+    for pa in (a1, a2):
+        for pb in (b1, b2):
+            dx = pa.x() - pb.x()
+            dy = pa.y() - pb.y()
+            if dx * dx + dy * dy <= tol_sq:
+                return True
+    return False
 
 
 def find_nearest_line_segment(
@@ -315,10 +332,16 @@ class SnapEngine:
         search = self._search_rect(cursor_scene, tol, visible_rect)
         if search.isEmpty():
             return []
+        pad = max(tol, 1e-6)
         result: list[EntityRecord] = []
         for record in self._records:
             bounds = record.bounds
-            if bounds.isNull() or bounds.intersects(search):
+            if bounds.isNull():
+                result.append(record)
+                continue
+            if bounds.width() < pad or bounds.height() < pad:
+                bounds = bounds.adjusted(-pad, -pad, pad, pad)
+            if bounds.intersects(search):
                 result.append(record)
         return result
 
@@ -451,13 +474,22 @@ class SnapEngine:
                 )
 
         if self.settings.is_enabled(SnapMode.INTERSECTION):
-            near_segments = self._segments_near(cursor_scene, tol * 8, nearby)
+            near_segments = self._segments_near(cursor_scene, tol * 6, nearby)
             if len(near_segments) > 80:
                 near_segments = near_segments[:80]
+            min_seg_sq = (tol * 0.25) ** 2
             for i in range(len(near_segments)):
                 for j in range(i + 1, len(near_segments)):
                     s1a, s1b, h1 = near_segments[i]
                     s2a, s2b, h2 = near_segments[j]
+                    if h1 == h2:
+                        continue
+                    if _segment_length_sq(s1a, s1b) < min_seg_sq:
+                        continue
+                    if _segment_length_sq(s2a, s2b) < min_seg_sq:
+                        continue
+                    if _segments_share_endpoint(s1a, s1b, s2a, s2b, tol * 0.05):
+                        continue
                     pt = _line_intersection(s1a, s1b, s2a, s2b)
                     if pt:
                         d = _dist(cursor_scene, pt)
@@ -475,13 +507,22 @@ class SnapEngine:
         if self.settings.is_enabled(SnapMode.APPARENT_INTERSECTION):
             from skyview.tools.measure_context import apparent_intersection_fits_view
 
-            near_segments = self._segments_near(cursor_scene, tol * 12, nearby)
+            near_segments = self._segments_near(cursor_scene, tol * 8, nearby)
             if len(near_segments) > 80:
                 near_segments = near_segments[:80]
+            min_seg_sq = (tol * 0.25) ** 2
             for i in range(len(near_segments)):
                 for j in range(i + 1, len(near_segments)):
                     s1 = near_segments[i]
                     s2 = near_segments[j]
+                    if s1[2] == s2[2]:
+                        continue
+                    if _segment_length_sq(s1[0], s1[1]) < min_seg_sq:
+                        continue
+                    if _segment_length_sq(s2[0], s2[1]) < min_seg_sq:
+                        continue
+                    if _segments_share_endpoint(s1[0], s1[1], s2[0], s2[1], tol * 0.05):
+                        continue
                     pt = _infinite_line_intersection(s1[0], s1[1], s2[0], s2[1])
                     if pt is None:
                         continue

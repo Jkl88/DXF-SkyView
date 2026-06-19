@@ -12,7 +12,7 @@ from ezdxf.entities import DXFEntity, Insert
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QColor, QPainterPath, QPen
 
-from skyview.dxf.bounds import records_dxf_extents
+from skyview.dxf.bounds import entity_scene_bounds, records_dxf_extents
 from skyview.dxf.segments import collect_line_segments_for_entity, path_to_pick_segments
 from skyview.dxf.units import read_units
 
@@ -193,7 +193,7 @@ def _make_record(entity: DXFEntity, doc, flatten: float) -> EntityRecord | None:
         path=qp,
         entity=entity,
         properties=_entity_properties(entity),
-        bounds=qp.boundingRect(),
+        bounds=entity_scene_bounds(entity) or qp.boundingRect(),
     )
     rec.pick_segments = path_to_pick_segments(qp)
     if not rec.pick_segments and rec.entity_type in ("LINE", "LWPOLYLINE", "POLYLINE"):

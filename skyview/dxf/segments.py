@@ -12,6 +12,20 @@ def to_qt(x: float, y: float) -> QPointF:
     return QPointF(x, -y)
 
 
+_CURVE_TYPES = frozenset({"CIRCLE", "ARC", "ELLIPSE", "SPLINE"})
+
+
+def entity_has_curved_edges(entity: DXFEntity) -> bool:
+    t = entity.dxftype()
+    if t in _CURVE_TYPES:
+        return True
+    if t == "LWPOLYLINE":
+        for pt in entity.get_points("xyseb"):
+            if len(pt) >= 5 and abs(pt[4]) > 1e-9:
+                return True
+    return False
+
+
 def collect_line_segments_for_entity(entity: DXFEntity) -> list[tuple[QPointF, QPointF]]:
     t = entity.dxftype()
     segs: list[tuple[QPointF, QPointF]] = []
@@ -40,6 +54,21 @@ def collect_line_segments_for_entity(entity: DXFEntity) -> list[tuple[QPointF, Q
                 (to_qt(verts[-1].x, verts[-1].y), to_qt(verts[0].x, verts[0].y))
             )
     return segs
+
+
+def snap_line_segments(record) -> list[tuple[QPointF, QPointF]]:
+    """Сегменты для привязок: без хорд аппроксимации окружностей/дуг."""
+    entity = record.entity
+    t = entity.dxftype()
+    if t in _CURVE_TYPES:
+        return []
+    if t in ("LINE", "LWPOLYLINE", "POLYLINE") and not entity_has_curved_edges(entity):
+        segs = collect_line_segments_for_entity(entity)
+        if segs:
+            return segs
+    if t in ("LWPOLYLINE", "POLYLINE", "SPLINE") and record.pick_segments:
+        return record.pick_segments
+    return collect_line_segments_for_entity(entity)
 
 
 def nearest_on_segment(cursor: QPointF, a: QPointF, b: QPointF) -> QPointF:
