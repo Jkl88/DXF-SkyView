@@ -94,7 +94,43 @@ def _is_safe_github_url(url: str) -> bool:
     return host in _GITHUB_HOSTS
 
 
+def fetch_latest_release_version(timeout: float = 15.0) -> str | None:
+    """Версия из последнего GitHub Release (для exe и релизных сборок)."""
+    latest = _github_get_json(f"{GITHUB_API_BASE}/releases/latest", timeout=timeout)
+    if isinstance(latest, dict):
+        tag = latest.get("tag_name")
+        if isinstance(tag, str) and tag.strip():
+            return _release_tag_version(tag)
+
+    releases = _github_get_json(
+        f"{GITHUB_API_BASE}/releases?per_page=20", timeout=timeout
+    )
+    if not isinstance(releases, list):
+        return None
+
+    best: tuple[int, ...] | None = None
+    best_version: str | None = None
+    for release in releases:
+        if not isinstance(release, dict) or release.get("draft"):
+            continue
+        if release.get("prerelease"):
+            continue
+        tag = release.get("tag_name")
+        if not isinstance(tag, str) or not tag.strip():
+            continue
+        version = _release_tag_version(tag)
+        key = version_tuple(version)
+        if best is None or key > best:
+            best = key
+            best_version = version
+    return best_version
+
+
 def fetch_remote_version(timeout: float = 12.0) -> str | None:
+    release_version = fetch_latest_release_version(timeout=timeout)
+    if release_version:
+        return release_version
+
     request = urllib.request.Request(
         REMOTE_VERSION_URL,
         headers={"User-Agent": f"DXF-SkyView/{APP_VERSION}"},
