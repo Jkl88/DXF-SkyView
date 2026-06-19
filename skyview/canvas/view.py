@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent, QPainter, QWheelEvent
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
@@ -27,9 +29,11 @@ class DxfScene(QGraphicsScene):
     def __init__(self, dark: bool = True):
         super().__init__()
         self.setBackgroundBrush(canvas_background())
+        self.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.BspTreeIndex)
         self._items: list[DxfPathItem] = []
         self._selected: set[DxfPathItem] = set()
         self._snap_highlighted: list[DxfPathItem] = []
+        self._records_cache: list[EntityRecord] | None = None
 
     def clear_all(self) -> None:
         for item in list(self._items):
@@ -37,6 +41,7 @@ class DxfScene(QGraphicsScene):
         self._items.clear()
         self._selected.clear()
         self._snap_highlighted.clear()
+        self._records_cache = None
 
     def item_by_handle(self, handle: str) -> DxfPathItem | None:
         for item in self._items:
@@ -71,6 +76,10 @@ class DxfScene(QGraphicsScene):
             self.addItem(item)
             items.append(item)
         self._items = items
+        self._records_cache = None
+        if items:
+            depth = int(max(6, min(12, math.log2(len(items) + 1) + 4)))
+            self.setBspTreeDepth(depth)
         return items
 
     def restore_records(self, records: list[EntityRecord]) -> list[DxfPathItem]:
@@ -80,7 +89,13 @@ class DxfScene(QGraphicsScene):
             self.addItem(item)
             self._items.append(item)
             restored.append(item)
+        self._records_cache = None
         return restored
+
+    def all_records(self) -> list[EntityRecord]:
+        if self._records_cache is None:
+            self._records_cache = [item.record for item in self._items]
+        return self._records_cache
 
     def content_bounding_rect(self) -> QRectF:
         return records_scene_bounds([item.record for item in self._items])
@@ -115,6 +130,7 @@ class DxfScene(QGraphicsScene):
             self.removeItem(item)
             self._items.remove(item)
         self._selected.clear()
+        self._records_cache = None
         return removed
 
     def items_at(self, scene_pos: QPointF, tol: float = 4.0) -> list[DxfPathItem]:
@@ -128,16 +144,20 @@ class DxfScene(QGraphicsScene):
             item
             for item in self.items(
                 rect,
-                Qt.SortOrder.DescendingOrder,
                 Qt.ItemSelectionMode.IntersectsItemBoundingRect,
+                Qt.SortOrder.DescendingOrder,
             )
             if isinstance(item, DxfPathItem)
         ]
-        hits = [item for item in candidates if item.matches_click(scene_pos, tol)]
-        hits.sort(
-            key=lambda item: item.boundingRect().width() * item.boundingRect().height()
-        )
-        return hits
+        hits: list[tuple[float, float, DxfPathItem]] = []
+        for item in candidates:
+            dist = item.pick_distance(scene_pos)
+            if dist is None or dist > tol:
+                continue
+            area = item.boundingRect().width() * item.boundingRect().height()
+            hits.append((dist, area, item))
+        hits.sort(key=lambda entry: (entry[0], entry[1]))
+        return [item for _dist, _area, item in hits]
 
 
 class DxfCanvas(QGraphicsView):
@@ -170,7 +190,7 @@ class DxfCanvas(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
         self.setMouseTracking(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -290,7 +310,7 @@ class DxfCanvas(QGraphicsView):
             scene_pos, self._scale_factor(), self._visible_scene_rect()
         )
         self._last_snap_result = snap
-        records = [item.record for item in self._scene.all_items()]
+        records = self._scene.all_records()
 
         measure_ctx = None
         if self._tool == "measure":
@@ -454,7 +474,8 @@ class DxfCanvas(QGraphicsView):
             super().mousePressEvent(event)
             return
 
-        pos, ctx = self._resolve_point(self._scene_pos(event))
+        scene_pos = self._scene_pos(event)
+        pos, ctx = self._resolve_point(scene_pos)
         self.cursor_moved.emit(pos.x(), -pos.y())
 
         if self._tool == "measure" and self._measure:
@@ -471,8 +492,9 @@ class DxfCanvas(QGraphicsView):
 
         if self._tool == "select":
             additive = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-            pick_tol = 8.0 / self._scale_factor()
-            hits = self._scene.items_at(pos, pick_tol)
+            scale = self._scale_factor()
+            pick_tol = max(8.0 / scale, 3.0)
+            hits = self._scene.items_at(scene_pos, pick_tol)
             if hits:
                 self._scene.select_item(hits[0], additive=additive)
             elif not additive:

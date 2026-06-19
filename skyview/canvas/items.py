@@ -8,8 +8,10 @@ from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem
 
 from skyview.canvas.screen_overlay import draw_screen_diamond
 from skyview.dxf.loader import EntityRecord, make_pen
+from skyview.dxf.segments import nearest_pick_distance
 
 _OUTLINE_ONLY_TYPES = frozenset({"LWPOLYLINE", "POLYLINE"})
+_MAX_VERTEX_MARKERS = 48
 
 
 class DxfPathItem(QGraphicsPathItem):
@@ -23,10 +25,11 @@ class DxfPathItem(QGraphicsPathItem):
         self._selected = False
         self._snap_highlight: str | None = None
         self._base_color = record.color
+        self._cached_shape = None
         self.setPen(make_pen(self._base_color, 1.0))
         self.setBrush(Qt.BrushStyle.NoBrush)
         self.setFlag(QGraphicsPathItem.GraphicsItemFlag.ItemIsSelectable, True)
-        self.setAcceptHoverEvents(True)
+        self.setAcceptHoverEvents(False)
         self.setData(0, self.TYPE)
         self.setData(1, record.handle)
 
@@ -46,7 +49,7 @@ class DxfPathItem(QGraphicsPathItem):
         elif self._snap_highlight == "line":
             self.setPen(make_pen(QColor(100, 180, 255), 2.0))
         elif self._snap_highlight in ("quadrant", "intersection", "midpoint") or self._selected:
-            self.setPen(make_pen(QColor(255, 220, 0), 2.0))
+            self.setPen(make_pen(QColor(255, 220, 0), 2.5 if self._outline_only() else 2.0))
         else:
             self.setPen(make_pen(self._base_color, 1.0))
 
@@ -65,25 +68,38 @@ class DxfPathItem(QGraphicsPathItem):
         return stroker.createStroke(self.path())
 
     def matches_click(self, scene_pos: QPointF, tol: float) -> bool:
-        if self._outline_only():
-            return self._stroke_hit_shape(tol).contains(scene_pos)
-        return self.shape().contains(scene_pos)
+        dist = self.pick_distance(scene_pos)
+        return dist is not None and dist <= tol
+
+    def pick_distance(self, scene_pos: QPointF) -> float | None:
+        if self.record.pick_segments:
+            return nearest_pick_distance(scene_pos, self.record.pick_segments)
+        if self.shape().contains(scene_pos):
+            return 0.0
+        return None
 
     def shape(self):
-        if self._outline_only():
-            return self._stroke_hit_shape(4.0)
-        return super().shape()
+        if not self._outline_only():
+            return super().shape()
+        if self._cached_shape is None:
+            self._cached_shape = self._stroke_hit_shape(4.0)
+        return self._cached_shape
 
     def paint(self, painter, option, widget=None) -> None:
         super().paint(painter, option, widget)
-        if self._selected:
-            from skyview.tools.snap import _entity_centers, _entity_endpoints
+        if not self._selected:
+            return
 
-            pts = _entity_endpoints(self.record)
-            if not pts:
-                pts = _entity_centers(self.record)
-            for pt in pts:
-                draw_screen_diamond(painter, pt, size=4.0)
+        from skyview.tools.snap import _entity_centers, _entity_endpoints
+
+        pts = _entity_endpoints(self.record)
+        if self._outline_only():
+            if len(pts) > _MAX_VERTEX_MARKERS:
+                return
+        elif not pts:
+            pts = _entity_centers(self.record)
+        for pt in pts:
+            draw_screen_diamond(painter, pt, size=4.0)
 
 
 class SnapMarkerItem(QGraphicsItem):

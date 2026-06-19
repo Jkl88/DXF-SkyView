@@ -9,10 +9,11 @@ from typing import Any
 import ezdxf
 from ezdxf import path as ezdxf_path
 from ezdxf.entities import DXFEntity, Insert
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QColor, QPainterPath, QPen
 
 from skyview.dxf.bounds import records_dxf_extents
+from skyview.dxf.segments import collect_line_segments_for_entity, path_to_pick_segments
 from skyview.dxf.units import read_units
 
 
@@ -27,6 +28,8 @@ class EntityRecord:
     path: QPainterPath
     entity: DXFEntity
     properties: dict[str, Any] = field(default_factory=dict)
+    bounds: QRectF = field(default_factory=QRectF)
+    pick_segments: list[tuple[QPointF, QPointF]] = field(default_factory=list)
 
 
 def _aci_to_color(aci: int) -> QColor:
@@ -182,7 +185,7 @@ def _make_record(entity: DXFEntity, doc, flatten: float) -> EntityRecord | None:
         return None
 
     color = _entity_color(entity, doc)
-    return EntityRecord(
+    rec = EntityRecord(
         handle=entity.dxf.handle,
         entity_type=entity.dxftype(),
         layer=entity.dxf.layer,
@@ -190,7 +193,12 @@ def _make_record(entity: DXFEntity, doc, flatten: float) -> EntityRecord | None:
         path=qp,
         entity=entity,
         properties=_entity_properties(entity),
+        bounds=qp.boundingRect(),
     )
+    rec.pick_segments = path_to_pick_segments(qp)
+    if not rec.pick_segments and rec.entity_type in ("LINE", "LWPOLYLINE", "POLYLINE"):
+        rec.pick_segments = collect_line_segments_for_entity(entity)
+    return rec
 
 
 @dataclass
@@ -203,14 +211,26 @@ class DxfDocument:
     extents: tuple[float, float, float, float] | None = None
 
 
-def load_dxf(filepath: str, flatten: float = 0.05) -> DxfDocument:
+def load_dxf(filepath: str, flatten: float | None = None) -> DxfDocument:
     """Загрузить DXF файл."""
     doc = ezdxf.readfile(filepath)
     msp = doc.modelspace()
     unit_code, unit_name, unit_short = read_units(doc)
 
+    entities = _collect_entities(msp, doc)
+    if flatten is None:
+        count = len(entities)
+        if count > 20000:
+            flatten = 0.35
+        elif count > 8000:
+            flatten = 0.2
+        elif count > 3000:
+            flatten = 0.1
+        else:
+            flatten = 0.05
+
     records: list[EntityRecord] = []
-    for entity in _collect_entities(msp, doc):
+    for entity in entities:
         rec = _make_record(entity, doc, flatten)
         if rec:
             records.append(rec)

@@ -31,6 +31,7 @@ from skyview.settings_store import (
     save_snap_priority,
     set_last_open_dir,
 )
+from skyview.integration import import_dxf, is_rectangle_creator_available
 from skyview.tools.snap import SnapMode, SnapSettings
 from skyview.ui.about_dialog import AboutDialog
 from skyview.ui.properties_panel import PropertiesPanel
@@ -61,6 +62,24 @@ def _make_measure_icon() -> QIcon:
     p.drawLine(6, 18, 4, 16)
     p.drawLine(18, 6, 20, 8)
     p.drawLine(18, 6, 16, 4)
+    p.end()
+    return QIcon(pix)
+
+
+def _make_edit_icon() -> QIcon:
+    pix = QPixmap(24, 24)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = p.pen()
+    pen.setColor(Qt.GlobalColor.white)
+    pen.setWidthF(1.8)
+    p.setPen(pen)
+    p.drawLine(6, 18, 18, 6)
+    p.drawLine(16, 4, 20, 8)
+    p.drawLine(16, 4, 14, 6)
+    p.drawLine(20, 8, 18, 10)
+    p.drawRect(4, 8, 10, 12)
     p.end()
     return QIcon(pix)
 
@@ -180,6 +199,15 @@ class MainWindow(QMainWindow):
         self._measure_btn.setCheckable(True)
         self._measure_btn.clicked.connect(self._toggle_measure)
         toolbar.addWidget(self._measure_btn)
+
+        if is_rectangle_creator_available():
+            self._edit_btn = QToolButton()
+            self._edit_btn.setIcon(_make_edit_icon())
+            self._edit_btn.setToolTip("Редактировать в DXF Rectangle Creator")
+            self._edit_btn.clicked.connect(self._open_in_editor)
+            toolbar.addWidget(self._edit_btn)
+        else:
+            self._edit_btn = None
 
     def _build_statusbar(self) -> None:
         self._status = QStatusBar()
@@ -317,6 +345,33 @@ class MainWindow(QMainWindow):
 
     def _toggle_measure(self, checked: bool) -> None:
         self._canvas.set_tool("measure" if checked else "select")
+
+    def _open_in_editor(self) -> None:
+        if self._current_doc is None:
+            QMessageBox.information(
+                self,
+                "Редактор",
+                "Сначала откройте DXF файл.",
+            )
+            return
+
+        if self._filepath is None:
+            if not self._save_file_as():
+                return
+        elif self._modified:
+            if not self._save_file():
+                return
+
+        if not self._filepath:
+            return
+
+        ok, message = import_dxf(self._filepath)
+        if ok:
+            self._status.showMessage(
+                f"Открыто в DXF Rectangle Creator: {os.path.basename(self._filepath)}"
+            )
+        else:
+            QMessageBox.warning(self, "Редактор", message)
 
     def _on_document_modified(self) -> None:
         self._modified = True

@@ -9,6 +9,7 @@ from enum import Enum, auto
 from PySide6.QtCore import QPointF, QRectF
 
 from skyview.dxf.loader import EntityRecord
+from skyview.dxf.segments import collect_line_segments_for_entity, nearest_on_segment
 
 
 class SnapMode(Enum):
@@ -233,51 +234,9 @@ def _point_on_segment(point: QPointF, a: QPointF, b: QPointF, tol: float = 1e-4)
 
 
 def _collect_line_segments(record: EntityRecord) -> list[tuple[QPointF, QPointF]]:
-    entity = record.entity
-    t = entity.dxftype()
-    segs: list[tuple[QPointF, QPointF]] = []
-
-    if t == "LINE":
-        s, e = entity.dxf.start, entity.dxf.end
-        segs.append((_to_qt(s.x, s.y), _to_qt(e.x, e.y)))
-    elif t == "LWPOLYLINE":
-        points = list(entity.get_points("xy"))
-        for i in range(len(points) - 1):
-            segs.append(
-                (_to_qt(points[i][0], points[i][1]), _to_qt(points[i + 1][0], points[i + 1][1]))
-            )
-        if entity.closed and len(points) > 1:
-            segs.append(
-                (_to_qt(points[-1][0], points[-1][1]), _to_qt(points[0][0], points[0][1]))
-            )
-    elif t == "POLYLINE":
-        verts = [v.dxf.location for v in entity.vertices]
-        for i in range(len(verts) - 1):
-            segs.append(
-                (_to_qt(verts[i].x, verts[i].y), _to_qt(verts[i + 1].x, verts[i + 1].y))
-            )
-        if entity.is_closed and len(verts) > 1:
-            segs.append(
-                (_to_qt(verts[-1].x, verts[-1].y), _to_qt(verts[0].x, verts[0].y))
-            )
-    return segs
-
-
-def _nearest_on_path_segment(
-    cursor: QPointF, record: EntityRecord
-) -> tuple[QPointF, QPointF, QPointF, float] | None:
-    path = record.path
-    if path.isEmpty():
-        return None
-    poly = path.toFillPolygon()
-    best: tuple[QPointF, QPointF, QPointF, float] | None = None
-    for i in range(len(poly) - 1):
-        seg_a, seg_b = poly[i], poly[i + 1]
-        foot = _nearest_on_segment(cursor, seg_a, seg_b)
-        d = _dist(cursor, foot)
-        if best is None or d < best[3]:
-            best = (foot, seg_a, seg_b, d)
-    return best
+    if record.pick_segments:
+        return record.pick_segments
+    return collect_line_segments_for_entity(record.entity)
 
 
 def find_nearest_line_segment(
@@ -292,27 +251,12 @@ def find_nearest_line_segment(
         if entity.dxftype() in ("CIRCLE", "ARC"):
             continue
 
-        hit = _nearest_on_path_segment(cursor, record)
-        if hit and (best is None or hit[3] < best[3]):
-            best = hit
-            best_handle = record.handle
-
-        t = entity.dxftype()
-        if t == "LINE":
-            s, e = entity.dxf.start, entity.dxf.end
-            a, b = _to_qt(s.x, s.y), _to_qt(e.x, e.y)
-            foot = _nearest_on_segment(cursor, a, b)
+        for seg_a, seg_b in _collect_line_segments(record):
+            foot = nearest_on_segment(cursor, seg_a, seg_b)
             d = _dist(cursor, foot)
             if d <= tol and (best is None or d < best[3]):
-                best = (foot, a, b, d)
+                best = (foot, seg_a, seg_b, d)
                 best_handle = record.handle
-        elif t in ("LWPOLYLINE", "POLYLINE"):
-            for a, b in _collect_line_segments(record):
-                foot = _nearest_on_segment(cursor, a, b)
-                d = _dist(cursor, foot)
-                if d <= tol and (best is None or d < best[3]):
-                    best = (foot, a, b, d)
-                    best_handle = record.handle
 
     if best is None or best[3] > tol or best_handle is None:
         return None
@@ -351,6 +295,50 @@ class SnapEngine:
     def set_records(self, records: list[EntityRecord]) -> None:
         self._records = records
 
+    def _search_rect(
+        self, cursor_scene: QPointF, tol: float, visible_rect: QRectF | None
+    ) -> QRectF:
+        margin = tol * 3
+        local = QRectF(
+            cursor_scene.x() - margin,
+            cursor_scene.y() - margin,
+            margin * 2,
+            margin * 2,
+        )
+        if visible_rect is not None and not visible_rect.isEmpty():
+            return local.intersected(visible_rect)
+        return local
+
+    def _nearby_records(
+        self, cursor_scene: QPointF, tol: float, visible_rect: QRectF | None
+    ) -> list[EntityRecord]:
+        search = self._search_rect(cursor_scene, tol, visible_rect)
+        if search.isEmpty():
+            return []
+        result: list[EntityRecord] = []
+        for record in self._records:
+            bounds = record.bounds
+            if bounds.isNull() or bounds.intersects(search):
+                result.append(record)
+        return result
+
+    def _segments_near(
+        self,
+        cursor_scene: QPointF,
+        margin: float,
+        records: list[EntityRecord],
+    ) -> list[tuple[QPointF, QPointF, str]]:
+        margin_sq = margin * margin
+        near: list[tuple[QPointF, QPointF, str]] = []
+        for record in records:
+            for seg_a, seg_b in _collect_line_segments(record):
+                foot = nearest_on_segment(cursor_scene, seg_a, seg_b)
+                dx = cursor_scene.x() - foot.x()
+                dy = cursor_scene.y() - foot.y()
+                if dx * dx + dy * dy <= margin_sq:
+                    near.append((seg_a, seg_b, record.handle))
+        return near
+
     def snap(
         self,
         cursor_scene: QPointF,
@@ -362,8 +350,9 @@ class SnapEngine:
         endpoint_tol = tol * ENDPOINT_TOLERANCE_SCALE
         midpoint_tol = tol * MIDPOINT_TOLERANCE_SCALE
         candidates: list[SnapResult] = []
+        nearby = self._nearby_records(cursor_scene, tol, visible_rect)
 
-        for record in self._records:
+        for record in nearby:
             if self.settings.is_enabled(SnapMode.ENDPOINT):
                 for pt in _entity_endpoints(record):
                     d = _dist(cursor_scene, pt)
@@ -447,7 +436,7 @@ class SnapEngine:
                         candidates.append(SnapResult(pt, SnapMode.NEAREST, d))
 
         if self.settings.is_enabled(SnapMode.LINE):
-            hit = find_nearest_line_segment(cursor_scene, self._records, tol)
+            hit = find_nearest_line_segment(cursor_scene, nearby, tol)
             if hit:
                 foot, la, lb, d, handle = hit
                 candidates.append(
@@ -462,14 +451,13 @@ class SnapEngine:
                 )
 
         if self.settings.is_enabled(SnapMode.INTERSECTION):
-            segments: list[tuple[QPointF, QPointF, str]] = []
-            for record in self._records:
-                for a, b in _collect_line_segments(record):
-                    segments.append((a, b, record.handle))
-            for i in range(len(segments)):
-                for j in range(i + 1, len(segments)):
-                    s1a, s1b, h1 = segments[i]
-                    s2a, s2b, h2 = segments[j]
+            near_segments = self._segments_near(cursor_scene, tol * 8, nearby)
+            if len(near_segments) > 80:
+                near_segments = near_segments[:80]
+            for i in range(len(near_segments)):
+                for j in range(i + 1, len(near_segments)):
+                    s1a, s1b, h1 = near_segments[i]
+                    s2a, s2b, h2 = near_segments[j]
                     pt = _line_intersection(s1a, s1b, s2a, s2b)
                     if pt:
                         d = _dist(cursor_scene, pt)
@@ -487,12 +475,13 @@ class SnapEngine:
         if self.settings.is_enabled(SnapMode.APPARENT_INTERSECTION):
             from skyview.tools.measure_context import apparent_intersection_fits_view
 
-            segments = []
-            for record in self._records:
-                segments.extend(_collect_line_segments(record))
-            for i in range(len(segments)):
-                for j in range(i + 1, len(segments)):
-                    s1, s2 = segments[i], segments[j]
+            near_segments = self._segments_near(cursor_scene, tol * 12, nearby)
+            if len(near_segments) > 80:
+                near_segments = near_segments[:80]
+            for i in range(len(near_segments)):
+                for j in range(i + 1, len(near_segments)):
+                    s1 = near_segments[i]
+                    s2 = near_segments[j]
                     pt = _infinite_line_intersection(s1[0], s1[1], s2[0], s2[1])
                     if pt is None:
                         continue
