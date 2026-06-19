@@ -12,4 +12,6 @@ venv/
 .vscode/
 *.user
 .DS_Store
-Thumbs.db
+dist/
+build/
+*.spec.bak

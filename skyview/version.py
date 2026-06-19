@@ -5,3 +5,12 @@ APP_DESCRIPTION = (
     "Современный просмотрщик DXF-файлов с поддержкой привязок, "
     "измерений и инспекции свойств объектов."
 )
+
+GITHUB_REPO = "Jkl88/DXF-SkyView"
+GITHUB_BRANCH = "main"
+GITHUB_URL = f"https://github.com/{GITHUB_REPO}"
+GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO}"
+RELEASE_EXE_NAME = "DXF-SkyView.exe"
+REMOTE_VERSION_URL = (
+    f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}/skyview/version.py"
+)

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QAction, QDragEnterEvent, QDragMoveEvent, QDropEvent, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QSplitter,
     QStatusBar,
     QToolBar,
@@ -33,7 +35,16 @@ from skyview.tools.snap import SnapMode, SnapSettings
 from skyview.ui.about_dialog import AboutDialog
 from skyview.ui.properties_panel import PropertiesPanel
 from skyview.ui.snap_settings_dialog import SnapSettingsDialog
-from skyview.version import APP_NAME
+from skyview.ui.update_dialog import ask_update
+from skyview.updater import (
+    UpdateCheckThread,
+    UpdateInstallThread,
+    is_frozen_app,
+    mark_version_skipped,
+    perform_update,
+    should_offer_update,
+)
+from skyview.version import APP_NAME, APP_VERSION
 
 
 def _make_measure_icon() -> QIcon:
@@ -65,6 +76,9 @@ class MainWindow(QMainWindow):
         self._current_doc: DxfDocument | None = None
         self._filepath: str | None = None
         self._modified = False
+        self._update_checked_on_start = False
+        self._update_thread: UpdateCheckThread | None = None
+        self._install_thread: UpdateInstallThread | None = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -147,6 +161,9 @@ class MainWindow(QMainWindow):
         view_menu.addAction(snap_act)
 
         help_menu = menu.addMenu("Справка")
+        check_updates_act = QAction("Проверить обновления…", self)
+        check_updates_act.triggered.connect(self._check_updates_manual)
+        help_menu.addAction(check_updates_act)
         about_act = QAction("О программе", self)
         about_act.triggered.connect(self._show_about)
         help_menu.addAction(about_act)
@@ -176,6 +193,120 @@ class MainWindow(QMainWindow):
         self._canvas.document_modified.connect(self._on_document_modified)
         self._canvas.file_dropped.connect(self._open_dropped_file)
         self._canvas.measure_exit_requested.connect(self._exit_measure_mode)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._update_checked_on_start:
+            self._update_checked_on_start = True
+            QTimer.singleShot(800, self._check_updates_on_start)
+
+    def _check_updates_on_start(self) -> None:
+        self._start_update_check(manual=False)
+
+    def _check_updates_manual(self) -> None:
+        self._start_update_check(manual=True)
+
+    def _start_update_check(self, manual: bool) -> None:
+        if self._update_thread is not None and self._update_thread.isRunning():
+            return
+        self._update_thread = UpdateCheckThread()
+        self._update_thread.finished_check.connect(
+            lambda remote: self._on_update_checked(remote, manual)
+        )
+        self._update_thread.start()
+
+    def _on_update_checked(self, remote_version: object, manual: bool) -> None:
+        remote = remote_version if isinstance(remote_version, str) else None
+        if remote is None:
+            if manual:
+                QMessageBox.warning(
+                    self,
+                    "Обновления",
+                    "Не удалось проверить обновления.\nПроверьте подключение к интернету.",
+                )
+            return
+
+        if not should_offer_update(remote):
+            if manual:
+                QMessageBox.information(
+                    self,
+                    "Обновления",
+                    f"Установлена актуальная версия {APP_VERSION}.",
+                )
+            return
+
+        choice = ask_update(self, remote)
+        if choice == "skip":
+            mark_version_skipped(remote)
+            return
+        if choice != "update":
+            return
+
+        if is_frozen_app():
+            self._start_exe_update(remote)
+            return
+
+        ok, message, quit_app = perform_update(remote)
+        self._show_update_result(ok, message, quit_app)
+
+    def _start_exe_update(self, remote_version: str) -> None:
+        if self._install_thread is not None and self._install_thread.isRunning():
+            return
+
+        progress = QProgressDialog("Загрузка обновления…", None, 0, 0, self)
+        progress.setWindowTitle("Обновление")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.show()
+
+        self._install_thread = UpdateInstallThread(remote_version, self)
+        self._install_thread.progress.connect(
+            lambda done, total: self._on_update_download_progress(progress, done, total)
+        )
+        self._install_thread.finished_install.connect(
+            lambda ok, message, quit_app: self._on_exe_update_finished(
+                progress, ok, message, quit_app
+            )
+        )
+        self._install_thread.start()
+
+    def _on_update_download_progress(
+        self, dialog: QProgressDialog, done: int, total: int
+    ) -> None:
+        if total > 0:
+            if dialog.maximum() != total:
+                dialog.setRange(0, total)
+            dialog.setValue(min(done, total))
+            dialog.setLabelText(
+                f"Загрузка обновления… {done * 100 // total}%"
+            )
+        else:
+            dialog.setRange(0, 0)
+
+    def _on_exe_update_finished(
+        self,
+        dialog: QProgressDialog,
+        ok: bool,
+        message: str,
+        quit_app: bool,
+    ) -> None:
+        dialog.close()
+        self._show_update_result(ok, message, quit_app)
+
+    def _show_update_result(self, ok: bool, message: str, quit_app: bool) -> None:
+        if ok:
+            if quit_app:
+                QMessageBox.information(self, "Обновление", message)
+                QApplication.instance().quit()
+            else:
+                QMessageBox.information(
+                    self,
+                    "Обновление",
+                    f"{message}\n\nПерезапустите приложение.",
+                )
+        else:
+            QMessageBox.critical(self, "Обновление", message)
 
     def _open_snap_settings(self) -> None:
         dialog = SnapSettingsDialog(self._snap_settings, self)

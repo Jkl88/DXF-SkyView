@@ -61,3 +61,17 @@ def load_snap_enabled() -> dict[SnapMode, bool] | None:
 
 def save_snap_enabled(enabled: dict[SnapMode, bool]) -> None:
     _settings().setValue("snap/enabled", {m.name: v for m, v in enabled.items()})
+
+
+def load_skipped_update_versions() -> set[str]:
+    raw = _settings().value("update/skippedVersions")
+    if not raw:
+        return set()
+    names = raw if isinstance(raw, list) else [raw]
+    return {str(v) for v in names if v}
+
+
+def skip_update_version(version: str) -> None:
+    skipped = load_skipped_update_versions()
+    skipped.add(version)
+    _settings().setValue("update/skippedVersions", sorted(skipped))

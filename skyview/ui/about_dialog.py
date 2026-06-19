@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout
 
+from skyview.resources import logo_path
 from skyview.version import APP_AUTHOR, APP_DESCRIPTION, APP_NAME, APP_VERSION
-
-_LOGO_PATH = Path(__file__).resolve().parents[2] / "АКОЛЕД.png"
 
 
 class AboutDialog(QDialog):
@@ -23,9 +20,9 @@ class AboutDialog(QDialog):
         layout.setSpacing(12)
         layout.setContentsMargins(24, 24, 24, 16)
 
-        if _LOGO_PATH.is_file():
+        if logo_path().is_file():
             logo = QLabel()
-            pixmap = QPixmap(str(_LOGO_PATH))
+            pixmap = QPixmap(str(logo_path()))
             if not pixmap.isNull():
                 logo.setPixmap(
                     pixmap.scaled(
