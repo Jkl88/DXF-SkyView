@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from PySide6.QtGui import QColor, QPen
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor, QPainterPathStroker, QPen
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem
 
 from skyview.canvas.screen_overlay import draw_screen_diamond
 from skyview.dxf.loader import EntityRecord, make_pen
+
+_OUTLINE_ONLY_TYPES = frozenset({"LWPOLYLINE", "POLYLINE"})
 
 
 class DxfPathItem(QGraphicsPathItem):
@@ -21,6 +24,7 @@ class DxfPathItem(QGraphicsPathItem):
         self._snap_highlight: str | None = None
         self._base_color = record.color
         self.setPen(make_pen(self._base_color, 1.0))
+        self.setBrush(Qt.BrushStyle.NoBrush)
         self.setFlag(QGraphicsPathItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
         self.setData(0, self.TYPE)
@@ -48,6 +52,27 @@ class DxfPathItem(QGraphicsPathItem):
 
     def is_highlighted(self) -> bool:
         return self._selected
+
+    def _outline_only(self) -> bool:
+        return self.record.entity_type in _OUTLINE_ONLY_TYPES
+
+    def _stroke_hit_shape(self, tol: float):
+        stroker = QPainterPathStroker()
+        pen = self.pen()
+        stroker.setWidth(max(pen.widthF(), tol * 2))
+        stroker.setCapStyle(pen.capStyle())
+        stroker.setJoinStyle(pen.joinStyle())
+        return stroker.createStroke(self.path())
+
+    def matches_click(self, scene_pos: QPointF, tol: float) -> bool:
+        if self._outline_only():
+            return self._stroke_hit_shape(tol).contains(scene_pos)
+        return self.shape().contains(scene_pos)
+
+    def shape(self):
+        if self._outline_only():
+            return self._stroke_hit_shape(4.0)
+        return super().shape()
 
     def paint(self, painter, option, widget=None) -> None:
         super().paint(painter, option, widget)

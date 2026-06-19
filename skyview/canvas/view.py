@@ -124,11 +124,20 @@ class DxfScene(QGraphicsScene):
             tol * 2,
             tol * 2,
         )
-        found = []
-        for item in self.items(rect):
-            if isinstance(item, DxfPathItem):
-                found.append(item)
-        return found
+        candidates = [
+            item
+            for item in self.items(
+                rect,
+                Qt.SortOrder.DescendingOrder,
+                Qt.ItemSelectionMode.IntersectsItemBoundingRect,
+            )
+            if isinstance(item, DxfPathItem)
+        ]
+        hits = [item for item in candidates if item.matches_click(scene_pos, tol)]
+        hits.sort(
+            key=lambda item: item.boundingRect().width() * item.boundingRect().height()
+        )
+        return hits
 
 
 class DxfCanvas(QGraphicsView):
@@ -462,7 +471,8 @@ class DxfCanvas(QGraphicsView):
 
         if self._tool == "select":
             additive = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-            hits = self._scene.items_at(pos)
+            pick_tol = 8.0 / self._scale_factor()
+            hits = self._scene.items_at(pos, pick_tol)
             if hits:
                 self._scene.select_item(hits[0], additive=additive)
             elif not additive:

@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -29,7 +31,14 @@ from skyview.version import (
 )
 
 _VERSION_RE = re.compile(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']')
-_GITHUB_HOSTS = frozenset({"github.com", "objects.githubusercontent.com"})
+_GITHUB_HOSTS = frozenset({
+    "api.github.com",
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+})
+_DOWNLOAD_RETRIES = 5
+_DOWNLOAD_CHUNK = 128 * 1024
 
 
 def parse_version(text: str) -> str | None:
@@ -75,18 +84,21 @@ def _release_tag_version(tag_name: str) -> str:
     return tag
 
 
-def _find_exe_asset(release: dict) -> str | None:
+def _find_exe_asset(release: dict) -> tuple[str | None, int | None]:
     assets = release.get("assets")
     if not isinstance(assets, list):
-        return None
+        return None, None
     for asset in assets:
         if not isinstance(asset, dict):
             continue
         if asset.get("name") == RELEASE_EXE_NAME:
             url = asset.get("browser_download_url")
-            if isinstance(url, str) and _is_safe_github_url(url):
-                return url
-    return None
+            asset_id = asset.get("id")
+            safe_url = url if isinstance(url, str) and _is_safe_github_url(url) else None
+            safe_id = asset_id if isinstance(asset_id, int) else None
+            if safe_url or safe_id:
+                return safe_url, safe_id
+    return None, None
 
 
 def _is_safe_github_url(url: str) -> bool:
@@ -143,26 +155,32 @@ def fetch_remote_version(timeout: float = 12.0) -> str | None:
     return parse_version(text)
 
 
-def fetch_release_exe_url(version: str) -> tuple[str | None, str]:
+def fetch_release_download(version: str) -> tuple[str | None, int | None, str]:
     for tag in (f"v{version}", version):
         release = _github_get_json(f"{GITHUB_API_BASE}/releases/tags/{tag}")
         if isinstance(release, dict):
-            url = _find_exe_asset(release)
-            if url:
-                return url, ""
+            url, asset_id = _find_exe_asset(release)
+            if url or asset_id:
+                return url, asset_id, ""
 
     latest = _github_get_json(f"{GITHUB_API_BASE}/releases/latest")
     if isinstance(latest, dict):
         if _release_tag_version(str(latest.get("tag_name", ""))) == version:
-            url = _find_exe_asset(latest)
-            if url:
-                return url, ""
+            url, asset_id = _find_exe_asset(latest)
+            if url or asset_id:
+                return url, asset_id, ""
 
     return (
+        None,
         None,
         f"На GitHub не найден релиз {version} с файлом {RELEASE_EXE_NAME}.\n"
         f"Страница релизов: {GITHUB_URL}/releases",
     )
+
+
+def fetch_release_exe_url(version: str) -> tuple[str | None, str]:
+    url, _asset_id, error = fetch_release_download(version)
+    return url, error
 
 
 def should_offer_update(remote_version: str) -> bool:
@@ -208,7 +226,29 @@ def run_git_update() -> tuple[bool, str]:
         return False, err or "Не удалось обновить через Git."
 
 
-def _download_file(
+def _download_headers(range_start: int = 0) -> dict[str, str]:
+    headers = {
+        "User-Agent": f"DXF-SkyView/{APP_VERSION}",
+        "Accept": "application/octet-stream",
+    }
+    if range_start > 0:
+        headers["Range"] = f"bytes={range_start}-"
+    return headers
+
+
+def _parse_download_total(response, range_start: int) -> int:
+    content_range = response.headers.get("Content-Range")
+    if content_range:
+        parts = content_range.split("/")
+        if len(parts) == 2 and parts[1].isdigit():
+            return int(parts[1])
+    content_length = response.headers.get("Content-Length")
+    if content_length and content_length.isdigit():
+        return range_start + int(content_length)
+    return -1
+
+
+def _download_http_once(
     url: str,
     destination: Path,
     progress: Callable[[int, int], None] | None = None,
@@ -217,28 +257,153 @@ def _download_file(
     if not _is_safe_github_url(url):
         raise ValueError("Недопустимый адрес загрузки.")
 
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": f"DXF-SkyView/{APP_VERSION}"},
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        total_header = response.headers.get("Content-Length")
-        total = int(total_header) if total_header else -1
-        if progress is not None:
-            progress(0, total)
+    range_start = destination.stat().st_size if destination.exists() else 0
+    request = urllib.request.Request(url, headers=_download_headers(range_start))
+    mode = "ab" if range_start > 0 else "wb"
+    destination.parent.mkdir(parents=True, exist_ok=True)
 
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        received = 0
-        chunk_size = 256 * 1024
-        with destination.open("wb") as handle:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        total = _parse_download_total(response, range_start)
+        received = range_start
+        if progress is not None:
+            progress(received, total)
+
+        with destination.open(mode) as handle:
             while True:
-                chunk = response.read(chunk_size)
+                chunk = response.read(_DOWNLOAD_CHUNK)
                 if not chunk:
                     break
                 handle.write(chunk)
                 received += len(chunk)
                 if progress is not None:
                     progress(received, total)
+
+
+def _download_http(
+    url: str,
+    destination: Path,
+    progress: Callable[[int, int], None] | None = None,
+    timeout: float = 600.0,
+) -> None:
+    last_error: Exception | None = None
+    for attempt in range(_DOWNLOAD_RETRIES):
+        try:
+            _download_http_once(url, destination, progress=progress, timeout=timeout)
+            return
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            last_error = exc
+            if destination.exists() and destination.stat().st_size == 0:
+                destination.unlink(missing_ok=True)
+            time.sleep(min(2**attempt, 12))
+    if last_error is not None:
+        raise last_error
+    raise OSError("Не удалось скачать файл.")
+
+
+def _download_api_asset(
+    asset_id: int,
+    destination: Path,
+    progress: Callable[[int, int], None] | None = None,
+    timeout: float = 600.0,
+) -> None:
+    url = f"{GITHUB_API_BASE}/releases/assets/{asset_id}"
+    _download_http(url, destination, progress=progress, timeout=timeout)
+
+
+def _download_with_curl(
+    url: str,
+    destination: Path,
+    progress: Callable[[int, int], None] | None = None,
+) -> None:
+    curl = shutil.which("curl") or shutil.which("curl.exe")
+    if not curl:
+        raise FileNotFoundError("curl не найден в системе.")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    args = [
+        curl,
+        "-L",
+        "-f",
+        "-s",
+        "--retry",
+        "8",
+        "--retry-delay",
+        "2",
+        "--retry-all-errors",
+        "--connect-timeout",
+        "30",
+        "--max-time",
+        "1800",
+        "-A",
+        f"DXF-SkyView/{APP_VERSION}",
+        "-o",
+        str(destination),
+    ]
+    if destination.exists() and destination.stat().st_size > 0:
+        args.extend(["-C", "-"])
+    args.append(url)
+
+    proc = subprocess.Popen(args)
+    while proc.poll() is None:
+        if progress is not None and destination.exists():
+            progress(destination.stat().st_size, -1)
+        time.sleep(0.4)
+
+    if proc.returncode != 0:
+        raise OSError(f"curl завершился с кодом {proc.returncode}")
+
+
+def _download_file(
+    url: str | None,
+    destination: Path,
+    progress: Callable[[int, int], None] | None = None,
+    asset_id: int | None = None,
+    timeout: float = 600.0,
+) -> None:
+    if destination.exists():
+        try:
+            destination.unlink()
+        except OSError:
+            pass
+
+    errors: list[str] = []
+    methods: list[tuple[str, Callable[[], None]]] = []
+    if url:
+        methods.append(("HTTP", lambda: _download_http(url, destination, progress, timeout)))
+    if asset_id is not None:
+        methods.append((
+            "GitHub API",
+            lambda: _download_api_asset(asset_id, destination, progress, timeout),
+        ))
+    if sys.platform == "win32" and url:
+        methods.append(("curl", lambda: _download_with_curl(url, destination, progress)))
+
+    for name, method in methods:
+        if destination.exists():
+            try:
+                destination.unlink()
+            except OSError:
+                pass
+        try:
+            method()
+            if destination.is_file() and destination.stat().st_size >= 1024 * 1024:
+                return
+            errors.append(f"{name}: файл слишком маленький")
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+            if destination.exists():
+                try:
+                    destination.unlink()
+                except OSError:
+                    pass
+
+    details = "\n".join(errors) if errors else "неизвестная ошибка"
+    raise OSError(
+        "Не удалось скачать обновление.\n"
+        f"{details}\n\n"
+        "Проверьте интернет, антивирус или VPN.\n"
+        f"Можно скачать вручную: {GITHUB_URL}/releases"
+    )
 
 
 def _create_windows_replacer(
@@ -279,8 +444,8 @@ def run_exe_update(
     if sys.platform != "win32":
         return False, "Автообновление exe поддерживается только в Windows.", False
 
-    download_url, error = fetch_release_exe_url(remote_version)
-    if not download_url:
+    download_url, asset_id, error = fetch_release_download(remote_version)
+    if not download_url and asset_id is None:
         return False, error, False
 
     target_exe = Path(sys.executable).resolve()
@@ -293,14 +458,19 @@ def run_exe_update(
             return False, "Не удалось подготовить файл обновления.", False
 
     try:
-        _download_file(download_url, new_exe, progress=progress)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        _download_file(
+            download_url,
+            new_exe,
+            progress=progress,
+            asset_id=asset_id,
+        )
+    except OSError as exc:
         if new_exe.exists():
             try:
                 new_exe.unlink()
             except OSError:
                 pass
-        return False, f"Не удалось скачать обновление:\n{exc}", False
+        return False, str(exc), False
 
     if new_exe.stat().st_size < 1024 * 1024:
         try:
