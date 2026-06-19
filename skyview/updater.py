@@ -411,27 +411,60 @@ def _create_windows_replacer(
     new_exe: Path,
     pid: int,
 ) -> Path:
-    bat_path = Path(tempfile.gettempdir()) / f"skyview_update_{pid}.bat"
+    """PowerShell-скрипт: дождаться выхода процесса, заменить exe, запустить."""
+    script_path = Path(tempfile.gettempdir()) / f"skyview_update_{pid}.ps1"
+    target = str(target_exe).replace("'", "''")
+    new = str(new_exe).replace("'", "''")
     lines = [
-        "@echo off",
-        "setlocal",
-        f'set "TARGET={target_exe}"',
-        f'set "NEW={new_exe}"',
-        f"set PID={pid}",
-        ":wait",
-        'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
-        "if %errorlevel%==0 (",
-        "    timeout /t 1 /nobreak >nul",
-        "    goto wait",
-        ")",
-        'if not exist "%NEW%" exit /b 1',
-        'copy /y "%NEW%" "%TARGET%" >nul',
-        'if exist "%NEW%" del /f /q "%NEW%"',
-        'start "" "%TARGET%"',
-        'del /f /q "%~f0"',
+        "$ErrorActionPreference = 'Stop'",
+        f"$target = '{target}'",
+        f"$new = '{new}'",
+        f"$procId = {pid}",
+        "$deadline = (Get-Date).AddMinutes(3)",
+        "while ((Get-Process -Id $procId -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {",
+        "    Start-Sleep -Milliseconds 500",
+        "}",
+        "for ($i = 0; $i -lt 90; $i++) {",
+        "    if (-not (Test-Path -LiteralPath $new)) { exit 1 }",
+        "    try {",
+        "        if (Test-Path -LiteralPath $target) {",
+        "            Remove-Item -LiteralPath $target -Force",
+        "        }",
+        "        Move-Item -LiteralPath $new -Destination $target -Force",
+        "        if (Test-Path -LiteralPath $target) {",
+        "            Start-Process -FilePath $target",
+        "            Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+        "            exit 0",
+        "        }",
+        "    } catch {",
+        "        Start-Sleep -Seconds 1",
+        "    }",
+        "}",
+        "exit 1",
     ]
-    bat_path.write_text("\r\n".join(lines) + "\r\n", encoding="ascii")
-    return bat_path
+    script_path.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+    return script_path
+
+
+def _launch_windows_updater(script_path: Path) -> None:
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags |= subprocess.CREATE_NO_WINDOW
+    subprocess.Popen(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            str(script_path),
+        ],
+        cwd=str(install_root()),
+        creationflags=creationflags,
+        close_fds=True,
+    )
 
 
 def run_exe_update(
@@ -480,13 +513,8 @@ def run_exe_update(
         return False, "Скачанный файл обновления повреждён или пуст.", False
 
     try:
-        bat_path = _create_windows_replacer(target_exe, new_exe, os.getpid())
-        subprocess.Popen(
-            ["cmd.exe", "/c", str(bat_path)],
-            cwd=str(install_root()),
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-            close_fds=True,
-        )
+        script_path = _create_windows_replacer(target_exe, new_exe, os.getpid())
+        _launch_windows_updater(script_path)
     except OSError as exc:
         try:
             new_exe.unlink()

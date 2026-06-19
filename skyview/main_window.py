@@ -326,6 +326,8 @@ class MainWindow(QMainWindow):
         if ok:
             if quit_app:
                 QMessageBox.information(self, "Обновление", message)
+                if is_frozen_app():
+                    os._exit(0)
                 QApplication.instance().quit()
             else:
                 QMessageBox.information(
