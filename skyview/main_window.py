@@ -325,9 +325,11 @@ class MainWindow(QMainWindow):
     def _show_update_result(self, ok: bool, message: str, quit_app: bool) -> None:
         if ok:
             if quit_app:
-                QMessageBox.information(self, "Обновление", message)
                 if is_frozen_app():
-                    os._exit(0)
+                    # Сразу выходим: .new.exe ждёт завершения этого процесса.
+                    QTimer.singleShot(300, lambda: os._exit(0))
+                    return
+                QMessageBox.information(self, "Обновление", message)
                 QApplication.instance().quit()
             else:
                 QMessageBox.information(

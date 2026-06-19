@@ -406,65 +406,128 @@ def _download_file(
     )
 
 
-def _create_windows_replacer(
-    target_exe: Path,
-    new_exe: Path,
-    pid: int,
-) -> Path:
-    """PowerShell-скрипт: дождаться выхода процесса, заменить exe, запустить."""
-    script_path = Path(tempfile.gettempdir()) / f"skyview_update_{pid}.ps1"
-    target = str(target_exe).replace("'", "''")
-    new = str(new_exe).replace("'", "''")
-    lines = [
-        "$ErrorActionPreference = 'Stop'",
-        f"$target = '{target}'",
-        f"$new = '{new}'",
-        f"$procId = {pid}",
-        "$deadline = (Get-Date).AddMinutes(3)",
-        "while ((Get-Process -Id $procId -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {",
-        "    Start-Sleep -Milliseconds 500",
-        "}",
-        "for ($i = 0; $i -lt 90; $i++) {",
-        "    if (-not (Test-Path -LiteralPath $new)) { exit 1 }",
-        "    try {",
-        "        if (Test-Path -LiteralPath $target) {",
-        "            Remove-Item -LiteralPath $target -Force",
-        "        }",
-        "        Move-Item -LiteralPath $new -Destination $target -Force",
-        "        if (Test-Path -LiteralPath $target) {",
-        "            Start-Process -FilePath $target",
-        "            Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
-        "            exit 0",
-        "        }",
-        "    } catch {",
-        "        Start-Sleep -Seconds 1",
-        "    }",
-        "}",
-        "exit 1",
-    ]
-    script_path.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
-    return script_path
+APPLY_UPDATE_FLAG = "--apply-update"
 
 
-def _launch_windows_updater(script_path: Path) -> None:
-    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+def _windows_detached_flags() -> int:
+    flags = subprocess.DETACHED_PROCESS
     if hasattr(subprocess, "CREATE_NO_WINDOW"):
-        creationflags |= subprocess.CREATE_NO_WINDOW
+        flags |= subprocess.CREATE_NO_WINDOW
+    if hasattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB"):
+        flags |= subprocess.CREATE_BREAKAWAY_FROM_JOB
+    return flags
+
+
+def _process_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _wait_for_process_exit(pid: int, timeout_sec: float = 180.0) -> None:
+    deadline = time.time() + timeout_sec
+    while _process_exists(pid) and time.time() < deadline:
+        time.sleep(0.4)
+    time.sleep(1.5)
+
+
+def _start_detached(exe_path: Path) -> None:
     subprocess.Popen(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-WindowStyle",
-            "Hidden",
-            "-File",
-            str(script_path),
-        ],
-        cwd=str(install_root()),
-        creationflags=creationflags,
+        [str(exe_path)],
+        cwd=str(exe_path.parent),
+        creationflags=_windows_detached_flags(),
         close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
+
+
+def _launch_apply_update(new_exe: Path, target_exe: Path, parent_pid: int) -> None:
+    """Запустить скачанный exe в режиме замены (отдельное дерево процессов)."""
+    args = [
+        str(new_exe),
+        APPLY_UPDATE_FLAG,
+        str(target_exe),
+        str(parent_pid),
+    ]
+    subprocess.Popen(
+        args,
+        cwd=str(install_root()),
+        creationflags=_windows_detached_flags(),
+        close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def apply_downloaded_update(target_exe: Path, parent_pid: int) -> int:
+    """Режим --apply-update: дождаться выхода старого процесса и установить обновление."""
+    source_exe = Path(sys.executable).resolve()
+    target_exe = target_exe.resolve()
+    log_path = Path(tempfile.gettempdir()) / f"skyview_update_{parent_pid}.log"
+
+    def log(message: str) -> None:
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{stamp}] {message}\n")
+        except OSError:
+            pass
+
+    log(f"apply-update started source={source_exe} target={target_exe} pid={parent_pid}")
+    _wait_for_process_exit(parent_pid)
+
+    min_size = 1024 * 1024
+    if not source_exe.is_file() or source_exe.stat().st_size < min_size:
+        log("source exe missing or too small")
+        return 1
+
+    for attempt in range(120):
+        try:
+            if target_exe.exists():
+                target_exe.unlink()
+        except OSError as exc:
+            log(f"delete attempt {attempt + 1}: {exc}")
+            time.sleep(1)
+            continue
+
+        try:
+            shutil.copy2(source_exe, target_exe)
+        except OSError as exc:
+            log(f"copy attempt {attempt + 1}: {exc}")
+            time.sleep(1)
+            continue
+
+        if target_exe.is_file() and target_exe.stat().st_size >= min_size:
+            log("copy ok, launching updated exe")
+            _start_detached(target_exe)
+            return 0
+
+        log(f"copy attempt {attempt + 1}: target invalid after copy")
+        time.sleep(1)
+
+    log("failed after retries")
+    return 1
+
+
+def cleanup_stale_new_exe() -> None:
+    """Удалить остаток .new.exe после успешного обновления."""
+    if not is_frozen_app() or sys.platform != "win32":
+        return
+    target_exe = Path(sys.executable).resolve()
+    stale_new = target_exe.with_name(f"{target_exe.stem}.new.exe")
+    if stale_new == target_exe or not stale_new.is_file():
+        return
+    try:
+        stale_new.unlink()
+    except OSError:
+        pass
 
 
 def run_exe_update(
@@ -513,8 +576,7 @@ def run_exe_update(
         return False, "Скачанный файл обновления повреждён или пуст.", False
 
     try:
-        script_path = _create_windows_replacer(target_exe, new_exe, os.getpid())
-        _launch_windows_updater(script_path)
+        _launch_apply_update(new_exe, target_exe, os.getpid())
     except OSError as exc:
         try:
             new_exe.unlink()
