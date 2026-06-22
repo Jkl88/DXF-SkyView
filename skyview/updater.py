@@ -447,24 +447,37 @@ def _start_detached(exe_path: Path) -> None:
     )
 
 
-def _launch_silent_setup(setup_exe: Path) -> None:
-    """Тихая установка обновления (Inno Setup)."""
-    args = [
-        str(setup_exe),
-        "/VERYSILENT",
-        "/SUPPRESSMSGBOXES",
-        "/CLOSEAPPLICATIONS",
-        "/MERGETASKS=associate",
-    ]
-    subprocess.Popen(
-        args,
-        cwd=str(setup_exe.parent),
-        creationflags=_windows_detached_flags(),
-        close_fds=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+def _shell_execute_error_message(code: int) -> str:
+    messages = {
+        0: "Недостаточно памяти для запуска установщика.",
+        2: "Файл установщика не найден.",
+        3: "Путь к установщику не найден.",
+        5: "Отказано в доступе.",
+        1223: "Обновление отменено: не получены права администратора.",
+    }
+    return messages.get(code, f"Не удалось запустить установщик (код {code}).")
+
+
+def _launch_elevated(exe: Path, parameters: str) -> None:
+    """Запуск с запросом UAC (нужно для установки в Program Files)."""
+    import ctypes
+
+    result = ctypes.windll.shell32.ShellExecuteW(
+        None,
+        "runas",
+        str(exe),
+        parameters,
+        str(exe.parent),
+        0,  # SW_HIDE — после UAC установка остаётся тихой
     )
+    if result <= 32:
+        raise OSError(_shell_execute_error_message(result))
+
+
+def _launch_silent_setup(setup_exe: Path) -> None:
+    """Тихая установка обновления (Inno Setup) с правами администратора."""
+    params = "/VERYSILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /MERGETASKS=associate"
+    _launch_elevated(setup_exe, params)
 
 
 def _is_inno_installer(path: Path) -> bool:
