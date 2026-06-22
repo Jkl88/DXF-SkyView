@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Сборка установщика DXF-SkyView-Setup.exe (onedir + Inno Setup)."""
+"""Сборка установщика DXF-SkyView.exe (onedir + Inno Setup)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ DIST_DIR = ROOT / "dist"
 BUILD_DIR = ROOT / "build"
 DIST_APP_DIR = DIST_DIR / "DXF-SkyView"
 DIST_APP_EXE = DIST_APP_DIR / "DXF-SkyView.exe"
-SETUP_EXE = DIST_DIR / "DXF-SkyView-Setup.exe"
+SETUP_EXE = DIST_DIR / "DXF-SkyView.exe"
 FILE_ICON = ROOT / "DXFfile.ico"
 VERSION_FILE = ROOT / "skyview" / "version.py"
 
@@ -137,7 +137,7 @@ def main() -> int:
     print(f"  Установщик: {SETUP_EXE}")
     print(f"  Размер: {size_mb:.1f} МБ")
     print()
-    print("Распространяйте DXF-SkyView-Setup.exe")
+    print("Распространяйте DXF-SkyView.exe (установщик).")
     print("Устанавливает в Program Files, ассоциация .dxf — при установке.")
     return 0
 

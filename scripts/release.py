@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = ROOT / "skyview" / "version.py"
-SETUP_EXE = ROOT / "dist" / "DXF-SkyView-Setup.exe"
+SETUP_EXE = ROOT / "dist" / "DXF-SkyView.exe"
 BUILD_SCRIPT = ROOT / "scripts" / "build_installer.py"
 
 

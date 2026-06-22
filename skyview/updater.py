@@ -467,8 +467,21 @@ def _launch_silent_setup(setup_exe: Path) -> None:
     )
 
 
-def _is_setup_installer(path: Path) -> bool:
-    return path.name.lower().endswith("-setup.exe")
+def _is_inno_installer(path: Path) -> bool:
+    """Inno Setup в PE/ресурсах (имя файла совпадает с приложением)."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            head = handle.read(min(size, 512 * 1024))
+            if b"Inno Setup" in head:
+                return True
+            if size > 512 * 1024:
+                handle.seek(max(0, size - 512 * 1024))
+                tail = handle.read()
+                return b"Inno Setup" in tail
+    except OSError:
+        pass
+    return False
 
 
 def _launch_apply_update(new_exe: Path, target_exe: Path, parent_pid: int) -> None:
@@ -603,7 +616,7 @@ def run_exe_update(
         return False, "Скачанный файл обновления повреждён или пуст.", False
 
     try:
-        if _is_setup_installer(new_exe):
+        if _is_inno_installer(new_exe):
             _launch_silent_setup(new_exe)
         else:
             shutil.copy2(new_exe, legacy_new)
