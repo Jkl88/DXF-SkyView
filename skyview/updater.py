@@ -41,6 +41,29 @@ _DOWNLOAD_RETRIES = 5
 _DOWNLOAD_CHUNK = 128 * 1024
 
 
+def _update_cache_dir() -> Path:
+    base = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "DXF-SkyView" / "updates"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _update_download_path(version: str) -> Path:
+    safe = re.sub(r'[<>:"/\\|?*]+', "_", version.strip()) or "latest"
+    return _update_cache_dir() / f"DXF-SkyView-{safe}.exe"
+
+
+def _safe_unlink(path: Path, *, retries: int = 8) -> bool:
+    if not path.exists():
+        return True
+    for attempt in range(retries):
+        try:
+            path.unlink()
+            return True
+        except OSError:
+            time.sleep(0.35 * (attempt + 1))
+    return False
+
+
 def parse_version(text: str) -> str | None:
     match = _VERSION_RE.search(text)
     return match.group(1) if match else None
@@ -567,17 +590,17 @@ def apply_downloaded_update(target_exe: Path, parent_pid: int) -> int:
 
 
 def cleanup_stale_new_exe() -> None:
-    """Удалить остаток .new.exe после успешного обновления."""
+    """Удалить остатки неудачных обновлений."""
     if not is_frozen_app() or sys.platform != "win32":
         return
     target_exe = Path(sys.executable).resolve()
     stale_new = target_exe.with_name(f"{target_exe.stem}.new.exe")
-    if stale_new == target_exe or not stale_new.is_file():
-        return
-    try:
-        stale_new.unlink()
-    except OSError:
-        pass
+    if stale_new != target_exe:
+        _safe_unlink(stale_new)
+    _safe_unlink(Path(tempfile.gettempdir()) / RELEASE_EXE_NAME)
+    cache = _update_cache_dir()
+    for path in cache.glob("DXF-SkyView-*.exe"):
+        _safe_unlink(path)
 
 
 def run_exe_update(
@@ -595,16 +618,23 @@ def run_exe_update(
         return False, error, False
 
     target_exe = Path(sys.executable).resolve()
-    temp_dir = Path(tempfile.gettempdir())
-    new_exe = temp_dir / RELEASE_EXE_NAME
+    new_exe = _update_download_path(remote_version)
     legacy_new = target_exe.with_name(f"{target_exe.stem}.new.exe")
 
-    for stale in (new_exe, legacy_new):
-        if stale.exists():
-            try:
-                stale.unlink()
-            except OSError:
-                return False, "Не удалось подготовить файл обновления.", False
+    if not _safe_unlink(new_exe):
+        fallback = new_exe.with_name(
+            f"{new_exe.stem}-{int(time.time())}{new_exe.suffix}"
+        )
+        if _safe_unlink(fallback):
+            new_exe = fallback
+        else:
+            return (
+                False,
+                "Не удалось подготовить файл обновления.\n"
+                f"Не удаётся очистить папку:\n{new_exe.parent}\n\n"
+                "Закройте другие копии программы и повторите попытку.",
+                False,
+            )
 
     try:
         _download_file(
@@ -615,30 +645,29 @@ def run_exe_update(
         )
     except OSError as exc:
         if new_exe.exists():
-            try:
-                new_exe.unlink()
-            except OSError:
-                pass
+            _safe_unlink(new_exe)
         return False, str(exc), False
 
     if new_exe.stat().st_size < 512 * 1024:
-        try:
-            new_exe.unlink()
-        except OSError:
-            pass
+        _safe_unlink(new_exe)
         return False, "Скачанный файл обновления повреждён или пуст.", False
 
     try:
         if _is_inno_installer(new_exe):
             _launch_silent_setup(new_exe)
         else:
+            if legacy_new.exists() and not _safe_unlink(legacy_new):
+                return (
+                    False,
+                    "Не удалось подготовить файл обновления в папке программы.\n"
+                    f"{legacy_new.parent}\n\n"
+                    "Запустите программу от имени администратора или обновите вручную.",
+                    False,
+                )
             shutil.copy2(new_exe, legacy_new)
             _launch_apply_update(legacy_new, target_exe, os.getpid())
     except OSError as exc:
-        try:
-            new_exe.unlink()
-        except OSError:
-            pass
+        _safe_unlink(new_exe)
         return False, f"Не удалось запустить установку обновления:\n{exc}", False
 
     return True, "Обновление загружено. Приложение перезапустится.", True
