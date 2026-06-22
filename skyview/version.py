@@ -1,5 +1,5 @@
 APP_NAME = "DXF SkyView"
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 APP_AUTHOR = "Белоусов О. И."
 APP_DESCRIPTION = (
     "Современный просмотрщик DXF-файлов с поддержкой привязок, "
