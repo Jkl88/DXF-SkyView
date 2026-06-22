@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
 
 from skyview.resources import (
     FILE_ICON_ICO,
     bundled_file_icon_path,
-    file_icon_cache_path,
     install_root,
 )
 from skyview.version import APP_NAME
@@ -30,32 +28,17 @@ def _icon_registry_value(icon_path: Path) -> str:
     return f"{icon_path.resolve()},0"
 
 
-def _bundled_file_icon() -> Path | None:
-    return bundled_file_icon_path()
-
-
 def deploy_file_icon() -> Path:
-    """Извлечь вшитую иконку файла (для реестра Windows)."""
-    if not getattr(sys, "frozen", False):
+    """Путь к иконке .dxf (рядом с exe после установки)."""
+    for base in (install_root(),):
         for name in (FILE_ICON_ICO, "DXFfile.png"):
-            path = install_root() / name
+            path = base / name
             if path.is_file():
                 return path
-        return install_root() / FILE_ICON_ICO
-
-    source = _bundled_file_icon()
-    target = file_icon_cache_path()
-    if source is None:
-        return target
-
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.is_file() or source.stat().st_mtime_ns > target.stat().st_mtime_ns:
-            shutil.copy2(source, target)
-    except OSError:
-        if source.is_file():
-            return source
-    return target if target.is_file() else source
+    bundled = bundled_file_icon_path()
+    if bundled is not None and bundled.is_file():
+        return bundled
+    return install_root() / FILE_ICON_ICO
 
 
 def _set_default_icon_subkey(parent_key, icon_ref: str) -> None:
@@ -173,20 +156,6 @@ def _write_association_registry(icon_path: Path, exe: Path) -> None:
         with winreg.CreateKey(ext_key, "OpenWithProgids") as ow_key:
             winreg.SetValue(ow_key, PROG_ID, winreg.REG_SZ, "")
             winreg.SetValue(ow_key, app_id, winreg.REG_SZ, "")
-
-
-def ensure_dxf_file_icon() -> None:
-    """Если .dxf открывается через SkyView — обновить иконку файла в реестре."""
-    if sys.platform != "win32" or not _is_our_dxf_handler():
-        return
-    icon_path = deploy_file_icon()
-    if not icon_path.is_file():
-        return
-    try:
-        _write_association_registry(icon_path, _exe_path())
-        _notify_shell()
-    except OSError:
-        pass
 
 
 def register_dxf_association() -> tuple[bool, str]:

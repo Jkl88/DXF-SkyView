@@ -6,15 +6,26 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-import ezdxf
-from ezdxf import path as ezdxf_path
-from ezdxf.entities import DXFEntity, Insert
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QColor, QPainterPath, QPen
 
 from skyview.dxf.bounds import entity_scene_bounds, records_dxf_extents
 from skyview.dxf.segments import collect_line_segments_for_entity, path_to_pick_segments
 from skyview.dxf.units import read_units
+
+_ezdxf_mod: Any = None
+_ezdxf_path_mod: Any = None
+
+
+def _import_ezdxf() -> tuple[Any, Any]:
+    global _ezdxf_mod, _ezdxf_path_mod
+    if _ezdxf_mod is None:
+        import ezdxf
+        from ezdxf import path as ezdxf_path
+
+        _ezdxf_mod = ezdxf
+        _ezdxf_path_mod = ezdxf_path
+    return _ezdxf_mod, _ezdxf_path_mod
 
 
 @dataclass
@@ -26,7 +37,7 @@ class EntityRecord:
     layer: str
     color: QColor
     path: QPainterPath
-    entity: DXFEntity
+    entity: Any
     properties: dict[str, Any] = field(default_factory=dict)
     bounds: QRectF = field(default_factory=QRectF)
     pick_segments: list[tuple[QPointF, QPointF]] = field(default_factory=list)
@@ -48,7 +59,7 @@ def _aci_to_color(aci: int) -> QColor:
     return table.get(aci, QColor(200, 200, 200))
 
 
-def _entity_color(entity: DXFEntity, doc) -> QColor:
+def _entity_color(entity, doc) -> QColor:
     aci = entity.dxf.color
     if aci == 256:  # BYLAYER
         layer = doc.layers.get(entity.dxf.layer)
@@ -62,7 +73,7 @@ def _entity_color(entity: DXFEntity, doc) -> QColor:
     return QColor(200, 200, 200)
 
 
-def _path_to_qpainter(ez_path: ezdxf_path.Path, flatten: float = 0.05) -> QPainterPath:
+def _path_to_qpainter(ez_path, flatten: float = 0.05) -> QPainterPath:
     """Конвертация ezdxf Path в QPainterPath с корректными дугами."""
     qp = QPainterPath()
     started = False
@@ -76,9 +87,12 @@ def _path_to_qpainter(ez_path: ezdxf_path.Path, flatten: float = 0.05) -> QPaint
     return qp
 
 
-def _collect_entities(msp, doc) -> list[DXFEntity]:
+def _collect_entities(msp, doc) -> list[Any]:
     """Собрать все сущности, разворачивая INSERT (блоки/отверстия)."""
-    result: list[DXFEntity] = []
+    ezdxf, _ = _import_ezdxf()
+    from ezdxf.entities import Insert
+
+    result: list[Any] = []
     for entity in msp:
         if entity.dxftype() == "INSERT":
             insert: Insert = entity
@@ -92,7 +106,7 @@ def _collect_entities(msp, doc) -> list[DXFEntity]:
     return result
 
 
-def _entity_properties(entity: DXFEntity) -> dict[str, Any]:
+def _entity_properties(entity) -> dict[str, Any]:
     """Извлечь свойства сущности для панели информации."""
     props: dict[str, Any] = {
         "type": entity.dxftype(),
@@ -171,7 +185,8 @@ def _entity_properties(entity: DXFEntity) -> dict[str, Any]:
     return props
 
 
-def _make_record(entity: DXFEntity, doc, flatten: float) -> EntityRecord | None:
+def _make_record(entity, doc, flatten: float) -> EntityRecord | None:
+    ezdxf, ezdxf_path = _import_ezdxf()
     try:
         ez_path = ezdxf_path.make_path(entity)
     except (TypeError, ValueError, ezdxf.DXFTypeError):
@@ -203,7 +218,7 @@ def _make_record(entity: DXFEntity, doc, flatten: float) -> EntityRecord | None:
 
 @dataclass
 class DxfDocument:
-    doc: ezdxf.document.Drawing
+    doc: Any
     records: list[EntityRecord]
     unit_code: int
     unit_name: str
@@ -213,6 +228,7 @@ class DxfDocument:
 
 def load_dxf(filepath: str, flatten: float | None = None) -> DxfDocument:
     """Загрузить DXF файл."""
+    ezdxf, _ = _import_ezdxf()
     doc = ezdxf.readfile(filepath)
     msp = doc.modelspace()
     unit_code, unit_name, unit_short = read_units(doc)

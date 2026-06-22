@@ -1,18 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Спецификация PyInstaller для DXF SkyView (onefile)."""
+"""Спецификация PyInstaller: папка dist (быстрый запуск, без распаковки)."""
 
-import os
 from pathlib import Path
 
 ROOT = Path(SPECPATH)
 LOGO = ROOT / "АКОЛЕД.png"
 APP_ICON = ROOT / "DXF.ico"
 FILE_ICON = ROOT / "DXFfile.ico"
-RUNTIME_TMPDIR = os.path.join(
-    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-    "DXF-SkyView",
-    "_runtime",
-)
 
 datas = []
 for asset in (LOGO, ROOT / "DXF.png", FILE_ICON):
@@ -67,17 +61,13 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="DXF-SkyView",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    upx_exclude=[],
-    runtime_tmpdir=RUNTIME_TMPDIR,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -85,4 +75,15 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(APP_ICON) if APP_ICON.is_file() else None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="DXF-SkyView",
 )

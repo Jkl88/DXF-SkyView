@@ -211,6 +211,14 @@ class DxfCanvas(QGraphicsView):
         self._panning = False
         self._pan_start = QPointF()
 
+    @property
+    def document(self) -> DxfDocument | None:
+        return self._doc
+
+    @property
+    def tool(self) -> str:
+        return self._tool
+
     def load_document(self, doc: DxfDocument) -> None:
         self._doc = doc
         self._undo.clear()
@@ -235,6 +243,9 @@ class DxfCanvas(QGraphicsView):
 
     def has_selection(self) -> bool:
         return bool(self._scene.selected_items())
+
+    def selected_records(self) -> list:
+        return [item.record for item in self._scene.selected_items()]
 
     def remaining_records(self) -> list:
         return [item.record for item in self._scene.all_items()]

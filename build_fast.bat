@@ -2,13 +2,13 @@
 setlocal
 cd /d "%~dp0"
 
-echo === DXF SkyView: сборка установщика ===
+echo === DXF SkyView: быстрая сборка (папка, быстрый запуск) ===
 echo.
 
 python -m pip install -r requirements-build.txt
 if errorlevel 1 goto :error
 
-python scripts\build_installer.py
+python scripts\build_exe.py --onedir
 if errorlevel 1 goto :error
 
 echo.

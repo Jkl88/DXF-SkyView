@@ -265,15 +265,12 @@ class MeasureOverlay(QGraphicsItem):
             perp_other = perpendicular_distance(other.point, la, lb)
             perp_line = perpendicular_distance(line_pt.point, la, lb)
 
-            if not line_pt.snapped:
-                if perp_other < ALIGN_TOL and perp_line < ALIGN_TOL:
-                    self._draw_aligned_on_line(painter, a, b, la, lb)
-                else:
-                    self._draw_perpendicular_to_line(painter, other.point, la, lb)
-            elif perp_other < ALIGN_TOL and perp_line < ALIGN_TOL:
+            if perp_other < ALIGN_TOL and perp_line < ALIGN_TOL:
                 self._draw_aligned_on_line(painter, a, b, la, lb)
+            elif perp_other >= perp_line:
+                self._draw_perpendicular_to_line(painter, other.point, la, lb)
             else:
-                self._draw_axis_triangle(painter, a, b)
+                self._draw_perpendicular_to_line(painter, line_pt.point, la, lb)
             return
 
         circle_a = self._is_hole_center(ctx_a)

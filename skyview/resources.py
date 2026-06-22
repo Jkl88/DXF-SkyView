@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -47,23 +46,13 @@ def bundled_file_icon_path() -> Path | None:
     return None
 
 
-def file_icon_cache_path() -> Path:
-    base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    return base / "SkyView" / FILE_ICON_ICO
-
-
 def file_icon_path() -> Path | None:
-    if getattr(sys, "frozen", False):
-        cached = file_icon_cache_path()
-        if cached.is_file():
-            return cached
-        return bundled_file_icon_path()
-
-    for name in (FILE_ICON_ICO, FILE_ICON_PNG):
-        path = install_root() / name
-        if path.is_file():
-            return path
-    return None
+    for base in (install_root(), app_root()):
+        for name in (FILE_ICON_ICO, FILE_ICON_PNG):
+            path = base / name
+            if path.is_file():
+                return path
+    return bundled_file_icon_path()
 
 
 def app_icon() -> QIcon:

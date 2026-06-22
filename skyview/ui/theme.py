@@ -69,6 +69,27 @@ QStatusBar {
     border-top: 1px solid #313244;
     color: #a6adc8;
 }
+QTabWidget::pane {
+    border: none;
+    background-color: #1e1e2e;
+}
+QTabBar::tab {
+    background-color: #313244;
+    border: 1px solid #45475a;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 6px 14px;
+    margin-right: 2px;
+    color: #a6adc8;
+}
+QTabBar::tab:selected {
+    background-color: #1e1e2e;
+    color: #89b4fa;
+}
+QTabBar::tab:hover:!selected {
+    background-color: #45475a;
+}
 QFrame#propertiesPanel {
     background-color: #181825;
     border-top: 1px solid #313244;
@@ -182,6 +203,27 @@ QStatusBar {
     background-color: #e6e9ef;
     border-top: 1px solid #ccd0da;
     color: #6c6f85;
+}
+QTabWidget::pane {
+    border: none;
+    background-color: #eff1f5;
+}
+QTabBar::tab {
+    background-color: #dce0e8;
+    border: 1px solid #ccd0da;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 6px 14px;
+    margin-right: 2px;
+    color: #6c6f85;
+}
+QTabBar::tab:selected {
+    background-color: #eff1f5;
+    color: #1e66f5;
+}
+QTabBar::tab:hover:!selected {
+    background-color: #ccd0da;
 }
 QFrame#propertiesPanel {
     background-color: #e6e9ef;

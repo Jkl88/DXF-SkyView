@@ -5,8 +5,6 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF
 from PySide6.QtGui import QPainterPath
 
-from ezdxf.entities import DXFEntity
-
 
 def to_qt(x: float, y: float) -> QPointF:
     return QPointF(x, -y)
@@ -26,7 +24,7 @@ def entity_has_curved_edges(entity: DXFEntity) -> bool:
     return False
 
 
-def collect_line_segments_for_entity(entity: DXFEntity) -> list[tuple[QPointF, QPointF]]:
+def collect_line_segments_for_entity(entity) -> list[tuple[QPointF, QPointF]]:
     t = entity.dxftype()
     segs: list[tuple[QPointF, QPointF]] = []
 

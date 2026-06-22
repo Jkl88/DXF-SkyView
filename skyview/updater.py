@@ -447,6 +447,30 @@ def _start_detached(exe_path: Path) -> None:
     )
 
 
+def _launch_silent_setup(setup_exe: Path) -> None:
+    """Тихая установка обновления (Inno Setup)."""
+    args = [
+        str(setup_exe),
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/CLOSEAPPLICATIONS",
+        "/MERGETASKS=associate",
+    ]
+    subprocess.Popen(
+        args,
+        cwd=str(setup_exe.parent),
+        creationflags=_windows_detached_flags(),
+        close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _is_setup_installer(path: Path) -> bool:
+    return path.name.lower().endswith("-setup.exe")
+
+
 def _launch_apply_update(new_exe: Path, target_exe: Path, parent_pid: int) -> None:
     """Запустить скачанный exe в режиме замены (отдельное дерево процессов)."""
     args = [
@@ -545,13 +569,16 @@ def run_exe_update(
         return False, error, False
 
     target_exe = Path(sys.executable).resolve()
-    new_exe = target_exe.with_name(f"{target_exe.stem}.new.exe")
+    temp_dir = Path(tempfile.gettempdir())
+    new_exe = temp_dir / RELEASE_EXE_NAME
+    legacy_new = target_exe.with_name(f"{target_exe.stem}.new.exe")
 
-    if new_exe.exists():
-        try:
-            new_exe.unlink()
-        except OSError:
-            return False, "Не удалось подготовить файл обновления.", False
+    for stale in (new_exe, legacy_new):
+        if stale.exists():
+            try:
+                stale.unlink()
+            except OSError:
+                return False, "Не удалось подготовить файл обновления.", False
 
     try:
         _download_file(
@@ -568,7 +595,7 @@ def run_exe_update(
                 pass
         return False, str(exc), False
 
-    if new_exe.stat().st_size < 1024 * 1024:
+    if new_exe.stat().st_size < 512 * 1024:
         try:
             new_exe.unlink()
         except OSError:
@@ -576,7 +603,11 @@ def run_exe_update(
         return False, "Скачанный файл обновления повреждён или пуст.", False
 
     try:
-        _launch_apply_update(new_exe, target_exe, os.getpid())
+        if _is_setup_installer(new_exe):
+            _launch_silent_setup(new_exe)
+        else:
+            shutil.copy2(new_exe, legacy_new)
+            _launch_apply_update(legacy_new, target_exe, os.getpid())
     except OSError as exc:
         try:
             new_exe.unlink()

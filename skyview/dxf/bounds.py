@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from ezdxf import bbox
-from ezdxf.entities import DXFEntity
+from typing import Any
+
 from PySide6.QtCore import QRectF
 
 
-def entities_dxf_extents(entities: list[DXFEntity]) -> tuple[float, float, float, float] | None:
+def entities_dxf_extents(entities: list[Any]) -> tuple[float, float, float, float] | None:
     """Габарит в координатах DXF: (min_x, min_y, max_x, max_y)."""
     if not entities:
         return None
+    from ezdxf import bbox
+
     box = bbox.extents(entities)
     if not box.has_data:
         return None
@@ -32,8 +34,10 @@ def dxf_extents_to_scene_rect(
     return QRectF(min_x, -max_y, width, height)
 
 
-def entity_scene_bounds(entity: DXFEntity) -> QRectF:
+def entity_scene_bounds(entity) -> QRectF:
     """Габарит одной сущности в координатах сцены."""
+    from ezdxf import bbox
+
     box = bbox.extents([entity])
     if not box.has_data:
         return QRectF()

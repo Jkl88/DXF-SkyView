@@ -10,8 +10,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "DXF-SkyView.spec"
+SPEC_ONEFILE = ROOT / "DXF-SkyView.spec"
+SPEC_ONEDIR = ROOT / "DXF-SkyView-onedir.spec"
 DIST_EXE = ROOT / "dist" / "DXF-SkyView.exe"
+DIST_ONEDIR_EXE = ROOT / "dist" / "DXF-SkyView" / "DXF-SkyView.exe"
+FILE_ICON = ROOT / "DXFfile.ico"
 BUILD_DIR = ROOT / "build"
 DIST_DIR = ROOT / "dist"
 
@@ -22,10 +25,12 @@ def _run(cmd: list[str]) -> None:
 
 
 def main() -> int:
+    onedir = "--onedir" in sys.argv
+
     if sys.platform != "win32":
         print("Скрипт рассчитан на сборку Windows exe.")
         print("На других ОС можно запустить PyInstaller вручную:")
-        print(f"  pyinstaller {SPEC.name}")
+        print(f"  pyinstaller {SPEC_ONEFILE.name}")
         return 1
 
     try:
@@ -50,6 +55,7 @@ def main() -> int:
     if BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
 
+    spec = SPEC_ONEDIR if onedir else SPEC_ONEFILE
     _run(
         [
             sys.executable,
@@ -57,22 +63,37 @@ def main() -> int:
             "PyInstaller",
             "--noconfirm",
             "--clean",
-            str(SPEC),
+            str(spec),
         ]
     )
 
-    if not DIST_EXE.is_file():
-        print("Ошибка: exe не создан.")
-        return 1
+    if onedir:
+        if not DIST_ONEDIR_EXE.is_file():
+            print("Ошибка: exe не создан.")
+            return 1
+        if FILE_ICON.is_file():
+            shutil.copy2(FILE_ICON, DIST_ONEDIR_EXE.parent / FILE_ICON.name)
+        target = DIST_ONEDIR_EXE
+        print()
+        print("Готово (onedir — быстрый запуск).")
+        print(f"  Папка: {DIST_ONEDIR_EXE.parent}")
+    else:
+        if not DIST_EXE.is_file():
+            print("Ошибка: exe не создан.")
+            return 1
+        target = DIST_EXE
+        print()
+        print("Готово (onefile).")
 
-    size_mb = DIST_EXE.stat().st_size / (1024 * 1024)
+    size_mb = target.stat().st_size / (1024 * 1024)
+    print(f"  Файл: {target}")
+    print(f"  Размер exe: {size_mb:.1f} МБ")
     print()
-    print("Готово.")
-    print(f"  Файл: {DIST_EXE}")
-    print(f"  Размер: {size_mb:.1f} МБ")
-    print()
-    print("Скопируйте DXF-SkyView.exe на другой компьютер.")
-    print("Иконка для .dxf вшита в exe (извлекается при ассоциации).")
+    if onedir:
+        print("Запускайте dist\\DXF-SkyView\\DXF-SkyView.exe")
+    else:
+        print("Скопируйте DXF-SkyView.exe на другой компьютер.")
+        print("Повторный запуск ускорен кэшем в %LOCALAPPDATA%\\DXF-SkyView\\_runtime")
     return 0
 
 
