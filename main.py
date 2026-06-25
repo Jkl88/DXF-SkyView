@@ -60,7 +60,7 @@ def _finish_splash_animated(splash, window) -> None:
         splash.finish(window)
         return
 
-    grow = 1.14
+    grow = 1.5
     target_w = int(start_rect.width() * grow)
     target_h = int(start_rect.height() * grow)
     center = start_rect.center()
