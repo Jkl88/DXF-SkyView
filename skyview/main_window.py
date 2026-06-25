@@ -572,8 +572,8 @@ class MainWindow(QMainWindow):
             lambda done, total: self._on_update_download_progress(progress, done, total)
         )
         self._install_thread.finished_install.connect(
-            lambda ok, message, downloaded, installer_path: self._on_exe_update_finished(
-                progress, ok, message, downloaded, installer_path
+            lambda ok, message, installer_path: self._on_exe_update_finished(
+                progress, ok, message, installer_path
             )
         )
         self._install_thread.start()
@@ -603,20 +603,22 @@ class MainWindow(QMainWindow):
             self._show_update_result(False, message, False)
             return
 
-        path = installer_path if isinstance(installer_path, Path) else None
-        if path is None:
+        if not installer_path:
             self._show_update_result(False, "Файл обновления не получен.", False)
             return
 
+        path = Path(str(installer_path))
         hwnd = int(self.winId())
         ok, launch_message = apply_downloaded_release(path, hwnd)
+        if ok:
+            QApplication.processEvents()
         self._show_update_result(ok, launch_message if ok else launch_message, ok)
 
     def _show_update_result(self, ok: bool, message: str, quit_app: bool) -> None:
         if ok:
             if quit_app:
                 if is_frozen_app():
-                    QTimer.singleShot(300, lambda: os._exit(0))
+                    QTimer.singleShot(1200, lambda: os._exit(0))
                     return
                 QMessageBox.information(self, "Обновление", message)
                 QApplication.instance().quit()

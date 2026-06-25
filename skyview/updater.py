@@ -485,6 +485,7 @@ def _launch_elevated(exe: Path, parameters: str, parent_hwnd: int | None = None)
     """Запуск с запросом UAC (нужно для установки в Program Files)."""
     import ctypes
 
+    exe = exe.resolve()
     hwnd = int(parent_hwnd) if parent_hwnd else 0
     result = ctypes.windll.shell32.ShellExecuteW(
         hwnd,
@@ -500,10 +501,11 @@ def _launch_elevated(exe: Path, parameters: str, parent_hwnd: int | None = None)
 
 def _launch_elevated_powershell(exe: Path, parameters: str) -> None:
     """Резервный запуск через PowerShell -Verb RunAs."""
+    exe = exe.resolve()
     parts = parameters.split()
     arg_list = ",".join(f"'{part}'" for part in parts)
     ps_cmd = (
-        f"Start-Process -FilePath '{exe}' -ArgumentList {arg_list} "
+        f"Start-Process -LiteralPath '{exe}' -ArgumentList {arg_list} "
         "-Verb RunAs -WindowStyle Hidden"
     )
     result = subprocess.run(
@@ -623,7 +625,7 @@ def apply_downloaded_update(target_exe: Path, parent_pid: int) -> int:
 
 
 def cleanup_stale_new_exe() -> None:
-    """Удалить остатки неудачных обновлений."""
+    """Удалить остатки неудачных portable-обновлений (не трогать кэш установщика)."""
     if not is_frozen_app() or sys.platform != "win32":
         return
     target_exe = Path(sys.executable).resolve()
@@ -631,9 +633,6 @@ def cleanup_stale_new_exe() -> None:
     if stale_new != target_exe:
         _safe_unlink(stale_new)
     _safe_unlink(Path(tempfile.gettempdir()) / RELEASE_EXE_NAME)
-    cache = _update_cache_dir()
-    for path in cache.glob("DXF-SkyView-*.exe"):
-        _safe_unlink(path)
 
 
 def download_exe_update(
@@ -691,8 +690,9 @@ def apply_downloaded_release(
     parent_hwnd: int | None = None,
 ) -> tuple[bool, str]:
     """Запустить скачанное обновление (с UI-потока, с запросом UAC)."""
+    installer_path = Path(installer_path).resolve()
     if not installer_path.is_file():
-        return False, "Файл обновления не найден."
+        return False, f"Файл обновления не найден:\n{installer_path}"
 
     target_exe = Path(sys.executable).resolve()
     legacy_new = target_exe.with_name(f"{target_exe.stem}.new.exe")
@@ -769,7 +769,7 @@ class UpdateCheckThread(QThread):
 
 class UpdateInstallThread(QThread):
     progress = Signal(int, int)
-    finished_install = Signal(bool, str, bool, object)  # Path | None
+    finished_install = Signal(bool, str, object)  # str path | None
 
     def __init__(self, remote_version: str, parent=None) -> None:
         super().__init__(parent)
@@ -782,7 +782,8 @@ class UpdateInstallThread(QThread):
         ok, message, installer_path = download_exe_update(
             self._remote_version, progress=report
         )
-        self.finished_install.emit(ok, message, ok, installer_path if ok else None)
+        path_value = str(installer_path) if ok and installer_path is not None else None
+        self.finished_install.emit(ok, message, path_value)
 
 
 def mark_version_skipped(version: str) -> None:
