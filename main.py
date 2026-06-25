@@ -50,6 +50,55 @@ def _show_splash(app):
     return splash
 
 
+def _finish_splash_animated(splash, window) -> None:
+    from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QRect
+    from PySide6.QtWidgets import QGraphicsOpacityEffect
+
+    duration_ms = 700  # Быстрый zoom + fade, не более 1 секунды.
+    start_rect = splash.geometry()
+    if not start_rect.isValid():
+        splash.finish(window)
+        return
+
+    grow = 1.14
+    target_w = int(start_rect.width() * grow)
+    target_h = int(start_rect.height() * grow)
+    center = start_rect.center()
+    target_rect = QRect(
+        int(center.x() - target_w / 2),
+        int(center.y() - target_h / 2),
+        target_w,
+        target_h,
+    )
+
+    opacity_effect = QGraphicsOpacityEffect(splash)
+    splash.setGraphicsEffect(opacity_effect)
+
+    geom_anim = QPropertyAnimation(splash, b"geometry", splash)
+    geom_anim.setDuration(duration_ms)
+    geom_anim.setStartValue(start_rect)
+    geom_anim.setEndValue(target_rect)
+    geom_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    fade_anim = QPropertyAnimation(opacity_effect, b"opacity", splash)
+    fade_anim.setDuration(duration_ms)
+    fade_anim.setStartValue(1.0)
+    fade_anim.setEndValue(0.0)
+    fade_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+
+    group = QParallelAnimationGroup(splash)
+    group.addAnimation(geom_anim)
+    group.addAnimation(fade_anim)
+
+    def _finalize() -> None:
+        splash.finish(window)
+        splash.deleteLater()
+
+    group.finished.connect(_finalize)
+    splash._finish_anim_group = group
+    group.start()
+
+
 def main() -> int:
     if _handle_apply_update_argv():
         return 0
@@ -101,7 +150,7 @@ def main() -> int:
 
     window.show()
     if splash is not None:
-        splash.finish(window)
+        _finish_splash_animated(splash, window)
 
     if pending_paths:
         QTimer.singleShot(0, lambda: window.open_paths(pending_paths))
