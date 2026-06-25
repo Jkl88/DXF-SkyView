@@ -45,40 +45,57 @@ def _show_splash(app):
         Qt.TransformationMode.SmoothTransformation,
     )
     splash = QSplashScreen(scaled)
+    splash._base_pixmap = scaled
+    splash._splash_center = splash.geometry().center()
     splash.show()
     app.processEvents()
+    splash._splash_center = splash.geometry().center()
     return splash
 
 
 def _finish_splash_animated(splash, window) -> None:
-    from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QRect
+    from PySide6.QtCore import (
+        QEasingCurve,
+        QParallelAnimationGroup,
+        QPropertyAnimation,
+        QVariantAnimation,
+        Qt,
+    )
     from PySide6.QtWidgets import QGraphicsOpacityEffect
 
-    duration_ms = 700  # Быстрый zoom + fade, не более 1 секунды.
-    start_rect = splash.geometry()
-    if not start_rect.isValid():
+    duration_ms = 700
+    grow = 1.5
+    base = getattr(splash, "_base_pixmap", None)
+    if base is None or base.isNull():
         splash.finish(window)
         return
 
-    grow = 1.5
-    target_w = int(start_rect.width() * grow)
-    target_h = int(start_rect.height() * grow)
-    center = start_rect.center()
-    target_rect = QRect(
-        int(center.x() - target_w / 2),
-        int(center.y() - target_h / 2),
-        target_w,
-        target_h,
-    )
+    center = getattr(splash, "_splash_center", splash.geometry().center())
 
     opacity_effect = QGraphicsOpacityEffect(splash)
     splash.setGraphicsEffect(opacity_effect)
 
-    geom_anim = QPropertyAnimation(splash, b"geometry", splash)
-    geom_anim.setDuration(duration_ms)
-    geom_anim.setStartValue(start_rect)
-    geom_anim.setEndValue(target_rect)
-    geom_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+    scale_anim = QVariantAnimation(splash)
+    scale_anim.setDuration(duration_ms)
+    scale_anim.setStartValue(1.0)
+    scale_anim.setEndValue(grow)
+    scale_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _on_scale_changed(value) -> None:
+        scale = float(value)
+        scaled = base.scaled(
+            int(base.width() * scale),
+            int(base.height() * scale),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        splash.setPixmap(scaled)
+        splash.move(
+            int(center.x() - scaled.width() / 2),
+            int(center.y() - scaled.height() / 2),
+        )
+
+    scale_anim.valueChanged.connect(_on_scale_changed)
 
     fade_anim = QPropertyAnimation(opacity_effect, b"opacity", splash)
     fade_anim.setDuration(duration_ms)
@@ -87,7 +104,7 @@ def _finish_splash_animated(splash, window) -> None:
     fade_anim.setEasingCurve(QEasingCurve.Type.InCubic)
 
     group = QParallelAnimationGroup(splash)
-    group.addAnimation(geom_anim)
+    group.addAnimation(scale_anim)
     group.addAnimation(fade_anim)
 
     def _finalize() -> None:

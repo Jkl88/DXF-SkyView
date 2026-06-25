@@ -61,4 +61,4 @@ Root: HKCU; Subkey: "Software\Classes\.dxf\OpenWithProgids"; ValueType: string; 
 Root: HKCU; Subkey: "Software\SkyView\DXF SkyView"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekey
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; Flags: nowait postinstall skipifsilent unchecked
+Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; Flags: nowait postinstall runasoriginaluser

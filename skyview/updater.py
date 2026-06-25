@@ -530,6 +530,55 @@ def _launch_elevated_powershell(exe: Path, parameters: str) -> None:
         )
 
 
+def _schedule_post_update_launch(installer_path: Path, app_exe: Path) -> None:
+    """Резервный запуск приложения после завершения тихого установщика."""
+    installer_path = installer_path.resolve()
+    app_exe = app_exe.resolve()
+    script_path = Path(tempfile.gettempdir()) / "skyview_post_update_launch.ps1"
+    script_path.write_text(
+        f"""
+$installer = '{installer_path}'
+$app = '{app_exe}'
+$deadline = (Get-Date).AddSeconds(180)
+while ((Get-Date) -lt $deadline) {{
+    $setup = Get-Process -ErrorAction SilentlyContinue |
+        Where-Object {{ $_.Path -and $_.Path -eq $installer }}
+    if (-not $setup) {{
+        Start-Sleep -Seconds 2
+        if (Test-Path -LiteralPath $app) {{
+            $running = Get-Process -ErrorAction SilentlyContinue |
+                Where-Object {{ $_.Path -and $_.Path -eq $app }}
+            if (-not $running) {{
+                Start-Process -LiteralPath $app
+            }}
+        }}
+        break
+    }}
+    Start-Sleep -Seconds 1
+}}
+Remove-Item -LiteralPath '{script_path}' -Force -ErrorAction SilentlyContinue
+""".strip(),
+        encoding="utf-8",
+    )
+    subprocess.Popen(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            str(script_path),
+        ],
+        creationflags=_windows_detached_flags(),
+        close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def _launch_silent_setup(setup_exe: Path, parent_hwnd: int | None = None) -> None:
     """Тихая установка обновления (Inno Setup) с правами администратора."""
     params = "/VERYSILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /MERGETASKS=associate"
@@ -537,6 +586,7 @@ def _launch_silent_setup(setup_exe: Path, parent_hwnd: int | None = None) -> Non
         _launch_elevated(setup_exe, params, parent_hwnd)
     except OSError:
         _launch_elevated_powershell(setup_exe, params)
+    _schedule_post_update_launch(setup_exe, Path(sys.executable))
 
 
 def _is_inno_installer(path: Path) -> bool:
