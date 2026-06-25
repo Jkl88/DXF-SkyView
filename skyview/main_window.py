@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, QTimer, QSize
@@ -63,6 +64,7 @@ from skyview.ui.update_dialog import ask_update
 from skyview.updater import (
     UpdateCheckThread,
     UpdateInstallThread,
+    apply_downloaded_release,
     is_frozen_app,
     mark_version_skipped,
     perform_update,
@@ -570,8 +572,8 @@ class MainWindow(QMainWindow):
             lambda done, total: self._on_update_download_progress(progress, done, total)
         )
         self._install_thread.finished_install.connect(
-            lambda ok, message, quit_app: self._on_exe_update_finished(
-                progress, ok, message, quit_app
+            lambda ok, message, downloaded, installer_path: self._on_exe_update_finished(
+                progress, ok, message, downloaded, installer_path
             )
         )
         self._install_thread.start()
@@ -592,12 +594,23 @@ class MainWindow(QMainWindow):
     def _on_exe_update_finished(
         self,
         dialog: QProgressDialog,
-        ok: bool,
+        downloaded: bool,
         message: str,
-        quit_app: bool,
+        installer_path: object,
     ) -> None:
         dialog.close()
-        self._show_update_result(ok, message, quit_app)
+        if not downloaded:
+            self._show_update_result(False, message, False)
+            return
+
+        path = installer_path if isinstance(installer_path, Path) else None
+        if path is None:
+            self._show_update_result(False, "Файл обновления не получен.", False)
+            return
+
+        hwnd = int(self.winId())
+        ok, launch_message = apply_downloaded_release(path, hwnd)
+        self._show_update_result(ok, launch_message if ok else launch_message, ok)
 
     def _show_update_result(self, ok: bool, message: str, quit_app: bool) -> None:
         if ok:

@@ -481,40 +481,73 @@ def _shell_execute_error_message(code: int) -> str:
     return messages.get(code, f"Не удалось запустить установщик (код {code}).")
 
 
-def _launch_elevated(exe: Path, parameters: str) -> None:
+def _launch_elevated(exe: Path, parameters: str, parent_hwnd: int | None = None) -> None:
     """Запуск с запросом UAC (нужно для установки в Program Files)."""
     import ctypes
 
+    hwnd = int(parent_hwnd) if parent_hwnd else 0
     result = ctypes.windll.shell32.ShellExecuteW(
-        None,
+        hwnd,
         "runas",
         str(exe),
         parameters,
         str(exe.parent),
-        0,  # SW_HIDE — после UAC установка остаётся тихой
+        1,  # SW_SHOWNORMAL — окно UAC должно быть видно
     )
     if result <= 32:
         raise OSError(_shell_execute_error_message(result))
 
 
-def _launch_silent_setup(setup_exe: Path) -> None:
+def _launch_elevated_powershell(exe: Path, parameters: str) -> None:
+    """Резервный запуск через PowerShell -Verb RunAs."""
+    parts = parameters.split()
+    arg_list = ",".join(f"'{part}'" for part in parts)
+    ps_cmd = (
+        f"Start-Process -FilePath '{exe}' -ArgumentList {arg_list} "
+        "-Verb RunAs -WindowStyle Hidden"
+    )
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            ps_cmd,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise OSError(
+            "Не удалось запросить права администратора.\n"
+            + (detail if detail else f"код {result.returncode}")
+        )
+
+
+def _launch_silent_setup(setup_exe: Path, parent_hwnd: int | None = None) -> None:
     """Тихая установка обновления (Inno Setup) с правами администратора."""
     params = "/VERYSILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /MERGETASKS=associate"
-    _launch_elevated(setup_exe, params)
+    try:
+        _launch_elevated(setup_exe, params, parent_hwnd)
+    except OSError:
+        _launch_elevated_powershell(setup_exe, params)
 
 
 def _is_inno_installer(path: Path) -> bool:
-    """Inno Setup в PE/ресурсах (имя файла совпадает с приложением)."""
+    """Inno Setup: подпись в начале файла (не только в первых 512 КБ)."""
     try:
         size = path.stat().st_size
         with path.open("rb") as handle:
-            head = handle.read(min(size, 512 * 1024))
-            if b"Inno Setup" in head:
-                return True
-            if size > 512 * 1024:
-                handle.seek(max(0, size - 512 * 1024))
-                tail = handle.read()
-                return b"Inno Setup" in tail
+            probe = handle.read(min(size, 8 * 1024 * 1024))
+        if b"Inno Setup" in probe:
+            return True
+        # Установщик ~40+ МБ, приложение в Program Files — несколько МБ.
+        if size >= 20 * 1024 * 1024:
+            return True
     except OSError:
         pass
     return False
@@ -603,23 +636,21 @@ def cleanup_stale_new_exe() -> None:
         _safe_unlink(path)
 
 
-def run_exe_update(
+def download_exe_update(
     remote_version: str,
     progress: Callable[[int, int], None] | None = None,
-) -> tuple[bool, str, bool]:
-    """Скачать релиз и подготовить замену exe. Третье значение — завершить приложение."""
+) -> tuple[bool, str, Path | None]:
+    """Скачать обновление. Запуск установки — на UI-потоке (для UAC)."""
     if not is_frozen_app():
-        return False, "Автообновление exe доступно только в собранной версии.", False
+        return False, "Автообновление exe доступно только в собранной версии.", None
     if sys.platform != "win32":
-        return False, "Автообновление exe поддерживается только в Windows.", False
+        return False, "Автообновление exe поддерживается только в Windows.", None
 
     download_url, asset_id, error = fetch_release_download(remote_version)
     if not download_url and asset_id is None:
-        return False, error, False
+        return False, error, None
 
-    target_exe = Path(sys.executable).resolve()
     new_exe = _update_download_path(remote_version)
-    legacy_new = target_exe.with_name(f"{target_exe.stem}.new.exe")
 
     if not _safe_unlink(new_exe):
         fallback = new_exe.with_name(
@@ -633,7 +664,7 @@ def run_exe_update(
                 "Не удалось подготовить файл обновления.\n"
                 f"Не удаётся очистить папку:\n{new_exe.parent}\n\n"
                 "Закройте другие копии программы и повторите попытку.",
-                False,
+                None,
             )
 
     try:
@@ -646,15 +677,29 @@ def run_exe_update(
     except OSError as exc:
         if new_exe.exists():
             _safe_unlink(new_exe)
-        return False, str(exc), False
+        return False, str(exc), None
 
     if new_exe.stat().st_size < 512 * 1024:
         _safe_unlink(new_exe)
-        return False, "Скачанный файл обновления повреждён или пуст.", False
+        return False, "Скачанный файл обновления повреждён или пуст.", None
+
+    return True, "", new_exe
+
+
+def apply_downloaded_release(
+    installer_path: Path,
+    parent_hwnd: int | None = None,
+) -> tuple[bool, str]:
+    """Запустить скачанное обновление (с UI-потока, с запросом UAC)."""
+    if not installer_path.is_file():
+        return False, "Файл обновления не найден."
+
+    target_exe = Path(sys.executable).resolve()
+    legacy_new = target_exe.with_name(f"{target_exe.stem}.new.exe")
 
     try:
-        if _is_inno_installer(new_exe):
-            _launch_silent_setup(new_exe)
+        if _is_inno_installer(installer_path):
+            _launch_silent_setup(installer_path, parent_hwnd)
         else:
             if legacy_new.exists() and not _safe_unlink(legacy_new):
                 return (
@@ -662,15 +707,33 @@ def run_exe_update(
                     "Не удалось подготовить файл обновления в папке программы.\n"
                     f"{legacy_new.parent}\n\n"
                     "Запустите программу от имени администратора или обновите вручную.",
-                    False,
                 )
-            shutil.copy2(new_exe, legacy_new)
+            shutil.copy2(installer_path, legacy_new)
             _launch_apply_update(legacy_new, target_exe, os.getpid())
     except OSError as exc:
-        _safe_unlink(new_exe)
-        return False, f"Не удалось запустить установку обновления:\n{exc}", False
+        return False, f"Не удалось запустить установку обновления:\n{exc}"
 
-    return True, "Обновление загружено. Приложение перезапустится.", True
+    return True, "Обновление загружено. Приложение перезапустится."
+
+
+def run_exe_update(
+    remote_version: str,
+    progress: Callable[[int, int], None] | None = None,
+    parent_hwnd: int | None = None,
+) -> tuple[bool, str, bool]:
+    """Скачать и установить обновление (parent_hwnd — для UAC на UI-потоке)."""
+    ok, message, installer_path = download_exe_update(remote_version, progress=progress)
+    if not ok:
+        return False, message, False
+    if installer_path is None:
+        return False, "Файл обновления не получен.", False
+
+    ok, message = apply_downloaded_release(installer_path, parent_hwnd)
+    if not ok:
+        _safe_unlink(installer_path)
+        return False, message, False
+
+    return True, message, True
 
 
 def open_download_page() -> None:
@@ -706,7 +769,7 @@ class UpdateCheckThread(QThread):
 
 class UpdateInstallThread(QThread):
     progress = Signal(int, int)
-    finished_install = Signal(bool, str, bool)
+    finished_install = Signal(bool, str, bool, object)  # Path | None
 
     def __init__(self, remote_version: str, parent=None) -> None:
         super().__init__(parent)
@@ -716,8 +779,10 @@ class UpdateInstallThread(QThread):
         def report(done: int, total: int) -> None:
             self.progress.emit(done, total)
 
-        ok, message, quit_app = run_exe_update(self._remote_version, progress=report)
-        self.finished_install.emit(ok, message, quit_app)
+        ok, message, installer_path = download_exe_update(
+            self._remote_version, progress=report
+        )
+        self.finished_install.emit(ok, message, ok, installer_path if ok else None)
 
 
 def mark_version_skipped(version: str) -> None:
