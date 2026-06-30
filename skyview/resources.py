@@ -12,6 +12,8 @@ APP_ICON_PNG = "DXF.png"
 APP_ICON_ICO = "DXF.ico"
 FILE_ICON_PNG = "DXFfile.png"
 FILE_ICON_ICO = "DXFfile.ico"
+DWG_FILE_ICON_PNG = "DWGfile.png"
+DWG_FILE_ICON_ICO = "DWGfile.ico"
 
 
 def app_root() -> Path:
@@ -44,6 +46,27 @@ def bundled_file_icon_path() -> Path | None:
         if path.is_file():
             return path
     return None
+
+
+def bundled_dwg_file_icon_path() -> Path | None:
+    for name in (DWG_FILE_ICON_ICO, DWG_FILE_ICON_PNG):
+        path = resource_path(name)
+        if path.is_file():
+            return path
+    return None
+
+
+def deploy_dwg_file_icon() -> Path:
+    """Путь к иконке .dwg (рядом с exe после установки)."""
+    for base in (install_root(),):
+        for name in (DWG_FILE_ICON_ICO, DWG_FILE_ICON_PNG):
+            path = base / name
+            if path.is_file():
+                return path
+    bundled = bundled_dwg_file_icon_path()
+    if bundled is not None and bundled.is_file():
+        return bundled
+    return install_root() / DWG_FILE_ICON_ICO
 
 
 def file_icon_path() -> Path | None:

@@ -34,7 +34,7 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Дополнительно:"
-Name: "associate"; Description: "Открывать файлы .dxf через DXF SkyView"; GroupDescription: "Ассоциации файлов:"; Flags: checkedonce
+Name: "associate"; Description: "Открывать файлы .dxf и .dwg через DXF SkyView"; GroupDescription: "Ассоциации файлов:"; Flags: checkedonce
 
 [Files]
 Source: "..\dist\DXF-SkyView\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -57,6 +57,14 @@ Root: HKCU; Subkey: "Software\Classes\.dxf"; ValueType: string; ValueName: ""; V
 Root: HKCU; Subkey: "Software\Classes\.dxf\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\DXFfile.ico,0"; Tasks: associate
 Root: HKCU; Subkey: "Software\Classes\.dxf\OpenWithProgids"; ValueType: string; ValueName: "DXF-SkyView.dxf"; ValueData: ""; Flags: uninsdeletevalue; Tasks: associate
 Root: HKCU; Subkey: "Software\Classes\.dxf\OpenWithProgids"; ValueType: string; ValueName: "Applications\{#MyAppExeName}"; ValueData: ""; Flags: uninsdeletevalue; Tasks: associate
+; Тип файла .dwg
+Root: HKCU; Subkey: "Software\Classes\DXF-SkyView.dwg"; ValueType: string; ValueName: ""; ValueData: "DWG Drawing (SkyView)"; Flags: uninsdeletekey; Tasks: associate
+Root: HKCU; Subkey: "Software\Classes\DXF-SkyView.dwg\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\DWGfile.ico,0"; Tasks: associate
+Root: HKCU; Subkey: "Software\Classes\DXF-SkyView.dwg\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: associate
+Root: HKCU; Subkey: "Software\Classes\.dwg"; ValueType: string; ValueName: ""; ValueData: "DXF-SkyView.dwg"; Flags: uninsdeletekey; Tasks: associate
+Root: HKCU; Subkey: "Software\Classes\.dwg\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\DWGfile.ico,0"; Tasks: associate
+Root: HKCU; Subkey: "Software\Classes\.dwg\OpenWithProgids"; ValueType: string; ValueName: "DXF-SkyView.dwg"; ValueData: ""; Flags: uninsdeletevalue; Tasks: associate
+Root: HKCU; Subkey: "Software\Classes\.dwg\OpenWithProgids"; ValueType: string; ValueName: "Applications\{#MyAppExeName}"; ValueData: ""; Flags: uninsdeletevalue; Tasks: associate
 ; Путь установки (для приложения)
 Root: HKCU; Subkey: "Software\SkyView\DXF SkyView"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekey
 

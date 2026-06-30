@@ -9,6 +9,8 @@ from typing import Any
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QColor, QPainterPath, QPen
 
+from pathlib import Path
+
 from skyview.dxf.bounds import entity_scene_bounds, records_dxf_extents
 from skyview.dxf.segments import collect_line_segments_for_entity, path_to_pick_segments
 from skyview.dxf.units import read_units
@@ -226,10 +228,47 @@ class DxfDocument:
     extents: tuple[float, float, float, float] | None = None
 
 
-def load_dxf(filepath: str, flatten: float | None = None) -> DxfDocument:
-    """Загрузить DXF файл."""
+def _read_dwg(filepath: str) -> Any:
+    try:
+        from ezdxf.addons import odafc
+    except ImportError as exc:
+        raise RuntimeError("Модуль чтения DWG недоступен.") from exc
+
+    from skyview.oda_converter import ensure_odafc
+
+    try:
+        ensure_odafc()
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            "Для открытия DWG установите ODA File Converter:\n"
+            "https://www.opendesign.com/guestfiles/oda_file_converter"
+        ) from exc
+
+    try:
+        return odafc.readfile(filepath)
+    except odafc.ODAFCNotInstalledError as exc:
+        raise RuntimeError(
+            "ODA File Converter не найден. Переустановите DXF SkyView."
+        ) from exc
+    except odafc.UnsupportedFileFormat as exc:
+        raise RuntimeError("Формат DWG не поддерживается.") from exc
+    except odafc.ODAFCError as exc:
+        raise RuntimeError(f"Не удалось прочитать DWG:\n{exc}") from exc
+
+
+def _open_cad_document(filepath: str) -> Any:
     ezdxf, _ = _import_ezdxf()
-    doc = ezdxf.readfile(filepath)
+    ext = Path(filepath).suffix.lower()
+    if ext == ".dwg":
+        return _read_dwg(filepath)
+    return ezdxf.readfile(filepath)
+
+
+def load_cad(filepath: str, flatten: float | None = None) -> DxfDocument:
+    """Загрузить DXF или DWG файл."""
+    doc = _open_cad_document(filepath)
     msp = doc.modelspace()
     unit_code, unit_name, unit_short = read_units(doc)
 
@@ -263,6 +302,11 @@ def load_dxf(filepath: str, flatten: float | None = None) -> DxfDocument:
         unit_short=unit_short,
         extents=extents,
     )
+
+
+def load_dxf(filepath: str, flatten: float | None = None) -> DxfDocument:
+    """Загрузить DXF файл (совместимость)."""
+    return load_cad(filepath, flatten)
 
 
 def make_pen(color: QColor, width: float = 1.0, cosmetic: bool = True) -> QPen:

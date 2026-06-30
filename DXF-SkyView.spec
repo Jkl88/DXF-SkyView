@@ -8,6 +8,7 @@ ROOT = Path(SPECPATH)
 LOGO = ROOT / "АКОЛЕД.png"
 APP_ICON = ROOT / "DXF.ico"
 FILE_ICON = ROOT / "DXFfile.ico"
+DWG_FILE_ICON = ROOT / "DWGfile.ico"
 RUNTIME_TMPDIR = os.path.join(
     os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
     "DXF-SkyView",
@@ -15,7 +16,7 @@ RUNTIME_TMPDIR = os.path.join(
 )
 
 datas = []
-for asset in (LOGO, ROOT / "DXF.png", FILE_ICON):
+for asset in (LOGO, ROOT / "DXF.png", FILE_ICON, DWG_FILE_ICON):
     if asset.is_file():
         datas.append((str(asset), "."))
 
@@ -29,6 +30,7 @@ a = Analysis(
     hiddenimports=[
         "ezdxf",
         "ezdxf.addons",
+        "ezdxf.addons.odafc",
         "ezdxf.entities",
         "ezdxf.layouts",
         "ezdxf.sections",

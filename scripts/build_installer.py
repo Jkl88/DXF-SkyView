@@ -19,7 +19,11 @@ DIST_APP_DIR = DIST_DIR / "DXF-SkyView"
 DIST_APP_EXE = DIST_APP_DIR / "DXF-SkyView.exe"
 SETUP_EXE = DIST_DIR / "DXF-SkyView.exe"
 FILE_ICON = ROOT / "DXFfile.ico"
+DWG_FILE_ICON = ROOT / "DWGfile.ico"
 VERSION_FILE = ROOT / "skyview" / "version.py"
+ODA_BUNDLE_DIR = ROOT / "third_party" / "oda" / "ODAFileConverter"
+ODA_DIST_DIR = DIST_APP_DIR / "ODAFileConverter"
+FETCH_ODA_SCRIPT = ROOT / "scripts" / "fetch_oda_converter.py"
 
 
 def _run(cmd: list[str], **kwargs) -> None:
@@ -48,12 +52,34 @@ def find_iscc() -> Path | None:
     return None
 
 
+def ensure_oda_bundle() -> None:
+    if not FETCH_ODA_SCRIPT.is_file():
+        raise RuntimeError(f"Не найден {FETCH_ODA_SCRIPT}")
+
+    print("ODA File Converter...")
+    _run([sys.executable, str(FETCH_ODA_SCRIPT)])
+    if not (ODA_BUNDLE_DIR / "ODAFileConverter.exe").is_file():
+        raise RuntimeError(f"Не найден {ODA_BUNDLE_DIR / 'ODAFileConverter.exe'}")
+
+
+def copy_oda_to_dist() -> None:
+    if ODA_DIST_DIR.exists():
+        shutil.rmtree(ODA_DIST_DIR)
+    shutil.copytree(
+        ODA_BUNDLE_DIR,
+        ODA_DIST_DIR,
+        ignore=shutil.ignore_patterns("*.msi"),
+    )
+
+
 def build_onedir(clean: bool = True) -> None:
     if clean:
         if DIST_DIR.exists():
             shutil.rmtree(DIST_DIR)
         if BUILD_DIR.exists():
             shutil.rmtree(BUILD_DIR)
+
+    ensure_oda_bundle()
 
     print("Иконки...")
     result = subprocess.run(
@@ -79,6 +105,10 @@ def build_onedir(clean: bool = True) -> None:
 
     if FILE_ICON.is_file() and not (DIST_APP_DIR / FILE_ICON.name).is_file():
         shutil.copy2(FILE_ICON, DIST_APP_DIR / FILE_ICON.name)
+    if DWG_FILE_ICON.is_file() and not (DIST_APP_DIR / DWG_FILE_ICON.name).is_file():
+        shutil.copy2(DWG_FILE_ICON, DIST_APP_DIR / DWG_FILE_ICON.name)
+
+    copy_oda_to_dist()
 
 
 def build_inno_setup(version: str) -> None:
@@ -138,7 +168,7 @@ def main() -> int:
     print(f"  Размер: {size_mb:.1f} МБ")
     print()
     print("Распространяйте DXF-SkyView.exe (установщик).")
-    print("Устанавливает в Program Files, ассоциация .dxf — при установке.")
+    print("Устанавливает в Program Files, ассоциация .dxf и .dwg — при установке.")
     return 0
 
 

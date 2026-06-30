@@ -11,6 +11,7 @@ ICON_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256
 PAIRS = (
     ("DXF.png", "DXF.ico"),
     ("DXFfile.png", "DXFfile.ico"),
+    ("DWGfile.png", "DWGfile.ico"),
 )
 
 

@@ -135,6 +135,11 @@ def main() -> int:
 
     cleanup_stale_new_exe()
 
+    if sys.platform == "win32":
+        from skyview.oda_converter import configure_odafc
+
+        configure_odafc()
+
     pending_paths = paths_from_argv(sys.argv)
 
     app = QApplication(sys.argv)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, QTimer, QSize
@@ -36,6 +35,14 @@ from PySide6.QtWidgets import (
 )
 
 from skyview.canvas.view import DxfCanvas
+from skyview.cad_files import (
+    absolute_path,
+    compare_path_key,
+    is_cad_file,
+    open_file_filter,
+    save_file_filter,
+    save_path_for_cad,
+)
 from skyview.settings_store import (
     last_open_dir,
     load_snap_enabled,
@@ -52,6 +59,7 @@ from skyview.settings_store import (
 from skyview.integration import (
     import_dxf,
     is_dxf_associated,
+    is_dwg_associated,
     register_dxf_association,
     unregister_dxf_association,
 )
@@ -112,10 +120,6 @@ def _style_emoji_toolbutton(btn: QToolButton, emoji: str) -> None:
     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
     btn.setIconSize(QSize(_TOOL_ICON_SIZE, _TOOL_ICON_SIZE))
     btn.setFixedSize(40, 32)
-
-
-def _normalize_path(path: str) -> str:
-    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
 
 
 @dataclass
@@ -212,13 +216,13 @@ class MainWindow(QMainWindow):
         return self._tab_docs.get(canvas)
 
     def _find_tab_index_by_path(self, path: str) -> int | None:
-        norm = _normalize_path(path)
+        key = compare_path_key(path)
         for index in range(self._tabs.count()):
             widget = self._tabs.widget(index)
             if not isinstance(widget, DxfCanvas):
                 continue
             tab = self._tab_docs.get(widget)
-            if tab and tab.filepath and tab.filepath == norm:
+            if tab and tab.filepath and compare_path_key(tab.filepath) == key:
                 return index
         return None
 
@@ -294,17 +298,17 @@ class MainWindow(QMainWindow):
             self.bring_to_front()
             return
 
-        from skyview.dxf.loader import load_dxf
+        from skyview.dxf.loader import load_cad
 
         try:
-            doc = load_dxf(path)
+            doc = load_cad(path)
         except Exception as exc:
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл:\n{exc}")
             return
 
-        norm = _normalize_path(path)
+        abs_path = absolute_path(path)
         canvas = self._create_tab_canvas()
-        tab = _DocTab(canvas=canvas, filepath=norm, modified=False)
+        tab = _DocTab(canvas=canvas, filepath=abs_path, modified=False)
         self._tab_docs[canvas] = tab
 
         index = self._tabs.addTab(canvas, tab.tab_text())
@@ -348,7 +352,7 @@ class MainWindow(QMainWindow):
         menu = self.menuBar()
 
         file_menu = menu.addMenu("Файл")
-        open_act = QAction("Открыть DXF…", self)
+        open_act = QAction("Открыть…", self)
         open_act.setShortcut(QKeySequence.StandardKey.Open)
         open_act.triggered.connect(self._open_file)
         file_menu.addAction(open_act)
@@ -370,9 +374,9 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
-        self._assoc_act = QAction("Открывать .dxf через SkyView", self)
+        self._assoc_act = QAction("Открывать .dxf и .dwg через SkyView", self)
         self._assoc_act.setCheckable(True)
-        self._assoc_act.setChecked(is_dxf_associated())
+        self._assoc_act.setChecked(is_dxf_associated() or is_dwg_associated())
         self._assoc_act.triggered.connect(self._toggle_dxf_association)
         file_menu.addAction(self._assoc_act)
 
@@ -470,7 +474,7 @@ class MainWindow(QMainWindow):
         else:
             ok, message = unregister_dxf_association()
         self._assoc_act.blockSignals(True)
-        self._assoc_act.setChecked(is_dxf_associated())
+        self._assoc_act.setChecked(is_dxf_associated() or is_dwg_associated())
         self._assoc_act.blockSignals(False)
         if ok:
             QMessageBox.information(self, "Ассоциация файлов", message)
@@ -742,9 +746,9 @@ class MainWindow(QMainWindow):
     def _open_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Открыть DXF",
+            "Открыть файл",
             self._dialog_start_dir(),
-            "DXF файлы (*.dxf);;Все файлы (*.*)",
+            open_file_filter(),
         )
         if path:
             self.open_path(path)
@@ -758,11 +762,13 @@ class MainWindow(QMainWindow):
             return True
         if not tab.filepath:
             return self._save_file_as_for_tab(tab)
+        save_path = save_path_for_cad(tab.filepath)
         try:
             from skyview.dxf.save import save_dxf
 
             remaining = tab.canvas.remaining_records()
-            save_dxf(tab.canvas.document, tab.filepath, remaining)
+            save_dxf(tab.canvas.document, save_path, remaining)
+            tab.filepath = absolute_path(save_path)
             tab.modified = False
             set_last_open_dir(tab.filepath)
             self._update_tab_text(tab.canvas)
@@ -787,13 +793,13 @@ class MainWindow(QMainWindow):
             self,
             "Сохранить DXF",
             self._dialog_start_dir(),
-            "DXF файлы (*.dxf);;Все файлы (*.*)",
+            save_file_filter(),
         )
         if not path:
             return False
         if not path.lower().endswith(".dxf"):
             path += ".dxf"
-        tab.filepath = _normalize_path(path)
+        tab.filepath = absolute_path(path)
         return self._save_tab(tab)
 
     def _save_file_as(self) -> bool:
@@ -840,29 +846,29 @@ class MainWindow(QMainWindow):
         AboutDialog(self).exec()
 
     @staticmethod
-    def _dxf_from_mime(mime) -> str | None:
+    def _cad_from_mime(mime) -> str | None:
         if not mime.hasUrls():
             return None
         for url in mime.urls():
             path = url.toLocalFile()
-            if path.lower().endswith(".dxf"):
+            if is_cad_file(path):
                 return path
         return None
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if self._dxf_from_mime(event.mimeData()):
+        if self._cad_from_mime(event.mimeData()):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if self._dxf_from_mime(event.mimeData()):
+        if self._cad_from_mime(event.mimeData()):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        path = self._dxf_from_mime(event.mimeData())
+        path = self._cad_from_mime(event.mimeData())
         if path:
             self.open_path(path)
             event.acceptProposedAction()

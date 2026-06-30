@@ -1,4 +1,4 @@
-"""Ассоциация .dxf с DXF SkyView (Windows)."""
+"""Ассоциация .dxf и .dwg с DXF SkyView (Windows)."""
 
 from __future__ import annotations
 
@@ -6,14 +6,19 @@ import sys
 from pathlib import Path
 
 from skyview.resources import (
+    DWG_FILE_ICON_ICO,
     FILE_ICON_ICO,
+    bundled_dwg_file_icon_path,
     bundled_file_icon_path,
+    deploy_dwg_file_icon,
     install_root,
 )
 from skyview.version import APP_NAME
 
-PROG_ID = "DXF-SkyView.dxf"
-FILE_TYPE_NAME = "DXF Drawing (SkyView)"
+DXF_PROG_ID = "DXF-SkyView.dxf"
+DWG_PROG_ID = "DXF-SkyView.dwg"
+DXF_FILE_TYPE_NAME = "DXF Drawing (SkyView)"
+DWG_FILE_TYPE_NAME = "DWG Drawing (SkyView)"
 
 
 def _exe_path() -> Path:
@@ -60,14 +65,14 @@ def _write_shell_open(parent_key, command: str) -> None:
         winreg.SetValue(cmd_key, None, winreg.REG_SZ, command)
 
 
-def _current_dxf_handler() -> str | None:
+def _current_extension_handler(ext: str) -> str | None:
     if sys.platform != "win32":
         return None
     import winreg
 
     for subkey in (
-        r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.dxf\UserChoice",
-        r"Software\Classes\.dxf",
+        rf"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice",
+        rf"Software\Classes\{ext}",
     ):
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as key:
@@ -82,11 +87,11 @@ def _current_dxf_handler() -> str | None:
     return None
 
 
-def _is_our_dxf_handler() -> bool:
-    handler = _current_dxf_handler()
+def _is_our_extension_handler(ext: str, prog_id: str) -> bool:
+    handler = _current_extension_handler(ext)
     if not handler:
         return False
-    if handler == PROG_ID:
+    if handler == prog_id:
         return True
     app_id = _app_prog_id()
     if handler == app_id:
@@ -98,7 +103,15 @@ def _is_our_dxf_handler() -> bool:
 
 
 def is_dxf_associated() -> bool:
-    return _is_our_dxf_handler()
+    return _is_our_extension_handler(".dxf", DXF_PROG_ID)
+
+
+def is_dwg_associated() -> bool:
+    return _is_our_extension_handler(".dwg", DWG_PROG_ID)
+
+
+def is_cad_associated() -> bool:
+    return is_dxf_associated() and is_dwg_associated()
 
 
 def _notify_shell() -> None:
@@ -131,71 +144,95 @@ def _delete_registry_tree(root, subkey: str) -> None:
         pass
 
 
-def _write_association_registry(icon_path: Path, exe: Path) -> None:
+def _write_extension_association(
+    ext: str,
+    prog_id: str,
+    type_name: str,
+    icon_path: Path,
+    exe: Path,
+) -> None:
     import winreg
 
     icon_ref = _icon_registry_value(icon_path)
     command = f'"{exe}" "%1"'
     app_id = _app_prog_id()
 
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{PROG_ID}") as progid_key:
-        winreg.SetValue(progid_key, None, winreg.REG_SZ, FILE_TYPE_NAME)
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{prog_id}") as progid_key:
+        winreg.SetValue(progid_key, None, winreg.REG_SZ, type_name)
         _set_default_icon_subkey(progid_key, icon_ref)
         _write_shell_open(progid_key, command)
 
-    with winreg.CreateKey(
-        winreg.HKEY_CURRENT_USER, rf"Software\Classes\{app_id}"
-    ) as app_key:
-        winreg.SetValue(app_key, "FriendlyAppName", winreg.REG_SZ, APP_NAME)
-        _set_default_icon_subkey(app_key, icon_ref)
-        _write_shell_open(app_key, command)
-
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\.dxf") as ext_key:
-        winreg.SetValue(ext_key, None, winreg.REG_SZ, PROG_ID)
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{ext}") as ext_key:
+        winreg.SetValue(ext_key, None, winreg.REG_SZ, prog_id)
         _set_default_icon_subkey(ext_key, icon_ref)
         with winreg.CreateKey(ext_key, "OpenWithProgids") as ow_key:
-            winreg.SetValue(ow_key, PROG_ID, winreg.REG_SZ, "")
+            winreg.SetValue(ow_key, prog_id, winreg.REG_SZ, "")
             winreg.SetValue(ow_key, app_id, winreg.REG_SZ, "")
+
+
+def _unregister_extension(ext: str, prog_id: str) -> None:
+    import winreg
+
+    _delete_registry_tree(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{prog_id}")
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, rf"Software\Classes\{ext}", 0, winreg.KEY_WRITE
+        ) as ext_key:
+            winreg.DeleteValue(ext_key, "")
+    except OSError:
+        pass
+    _delete_registry_tree(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{ext}")
 
 
 def register_dxf_association() -> tuple[bool, str]:
     if sys.platform != "win32":
         return False, "Ассоциация файлов поддерживается только в Windows."
 
-    icon_path = deploy_file_icon()
-    if not icon_path.is_file():
-        return False, "Не найдена вшитая иконка файла."
+    import winreg
 
+    dxf_icon = deploy_file_icon()
+    dwg_icon = deploy_dwg_file_icon()
+    if not dxf_icon.is_file():
+        return False, "Не найдена иконка для .dxf."
+    if not dwg_icon.is_file():
+        return False, "Не найдена иконка для .dwg."
+
+    exe = _exe_path()
     try:
-        _write_association_registry(icon_path, _exe_path())
+        _write_extension_association(".dxf", DXF_PROG_ID, DXF_FILE_TYPE_NAME, dxf_icon, exe)
+        _write_extension_association(".dwg", DWG_PROG_ID, DWG_FILE_TYPE_NAME, dwg_icon, exe)
+
+        with winreg.CreateKey(
+            winreg.HKEY_CURRENT_USER, rf"Software\Classes\{_app_prog_id()}"
+        ) as app_key:
+            winreg.SetValue(app_key, "FriendlyAppName", winreg.REG_SZ, APP_NAME)
+            _set_default_icon_subkey(app_key, _icon_registry_value(dxf_icon))
+            _write_shell_open(app_key, f'"{exe}" "%1"')
+
         _notify_shell()
     except OSError as exc:
         return False, f"Не удалось записать в реестр:\n{exc}"
 
-    return True, "Файлы .dxf будут открываться в DXF SkyView."
+    return True, "Файлы .dxf и .dwg будут открываться в DXF SkyView."
 
 
 def unregister_dxf_association() -> tuple[bool, str]:
     if sys.platform != "win32":
         return False, "Ассоциация файлов поддерживается только в Windows."
 
-    if not is_dxf_associated():
+    if not is_dxf_associated() and not is_dwg_associated():
         return True, "Ассоциация не была установлена."
 
     import winreg
 
     try:
-        _delete_registry_tree(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{PROG_ID}")
+        _unregister_extension(".dxf", DXF_PROG_ID)
+        _unregister_extension(".dwg", DWG_PROG_ID)
         _delete_registry_tree(
             winreg.HKEY_CURRENT_USER, rf"Software\Classes\{_app_prog_id()}"
         )
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, r"Software\Classes\.dxf", 0, winreg.KEY_WRITE
-        ) as ext_key:
-            winreg.DeleteValue(ext_key, "")
-        _delete_registry_tree(winreg.HKEY_CURRENT_USER, r"Software\Classes\.dxf")
         _notify_shell()
     except OSError as exc:
         return False, f"Не удалось удалить ассоциацию:\n{exc}"
 
-    return True, "Ассоциация .dxf снята."
+    return True, "Ассоциация .dxf и .dwg снята."

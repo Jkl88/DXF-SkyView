@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent, Q
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
 
 from skyview.canvas.items import DxfPathItem, SnapMarkerItem
+from skyview.cad_files import is_cad_file
 from skyview.dxf.bounds import records_scene_bounds, records_size
 from skyview.dxf.loader import DxfDocument, EntityRecord
 from skyview.tools.measure import MeasureOverlay
@@ -597,29 +598,29 @@ class DxfCanvas(QGraphicsView):
         self._update_viewport_overlays()
 
     @staticmethod
-    def _dxf_from_mime(mime) -> str | None:
+    def _cad_from_mime(mime) -> str | None:
         if not mime.hasUrls():
             return None
         for url in mime.urls():
             path = url.toLocalFile()
-            if path.lower().endswith(".dxf"):
+            if is_cad_file(path):
                 return path
         return None
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if self._dxf_from_mime(event.mimeData()):
+        if self._cad_from_mime(event.mimeData()):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if self._dxf_from_mime(event.mimeData()):
+        if self._cad_from_mime(event.mimeData()):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        path = self._dxf_from_mime(event.mimeData())
+        path = self._cad_from_mime(event.mimeData())
         if path:
             self.file_dropped.emit(path)
             event.acceptProposedAction()

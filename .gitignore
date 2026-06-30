@@ -15,3 +15,7 @@ venv/
 dist/
 build/
 *.spec.bak
+third_party/oda/download/
+third_party/oda/_extract/
+third_party/oda/extract/
+third_party/oda/ODAFileConverter/

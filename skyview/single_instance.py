@@ -7,6 +7,8 @@ from collections.abc import Callable
 
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
+from skyview.cad_files import is_cad_file
+
 SERVER_NAME = "DXF-SkyView-SingleInstance-v1"
 
 
@@ -15,7 +17,7 @@ def paths_from_argv(argv: list[str]) -> list[str]:
     for arg in argv[1:]:
         if arg.startswith("-"):
             continue
-        if arg.lower().endswith(".dxf") and os.path.isfile(arg):
+        if is_cad_file(arg) and os.path.isfile(arg):
             paths.append(os.path.abspath(arg))
     return paths
 
