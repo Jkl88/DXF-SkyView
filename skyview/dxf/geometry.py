@@ -22,6 +22,34 @@ def _subsample_points(points: list[QPointF], max_points: int) -> list[QPointF]:
     return [points[int(i * last / (max_points - 1))] for i in range(max_points)]
 
 
+_SPLINE_MAX_POINTS_HD = 128
+
+
+def simplify_qpainter_path(path: QPainterPath, max_points: int = 32) -> QPainterPath:
+    """Упрощённый контур для LOD вне экрана."""
+    if path.elementCount() <= max_points + 1:
+        return path
+
+    simplified = path.simplified()
+    if simplified.elementCount() <= max_points + 1:
+        return simplified
+
+    points: list[QPointF] = []
+    for i in range(simplified.elementCount()):
+        el = simplified.elementAt(i)
+        if el.type in (
+            QPainterPath.ElementType.MoveToElement,
+            QPainterPath.ElementType.LineToElement,
+        ):
+            points.append(QPointF(el.x, el.y))
+    if len(points) < 2:
+        return simplified
+
+    reduced = _subsample_points(points, max_points)
+    result = _spline_path_from_points(reduced)
+    return result if result is not None else simplified
+
+
 def _spline_max_points(entity_count: int, spline_count: int) -> int:
     if spline_count >= 200 or entity_count >= 1500:
         return _SPLINE_MAX_POINTS_DENSE

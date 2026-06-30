@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QPainterPathStroker, QPen
+from PySide6.QtGui import QColor, QPainter, QPainterPathStroker, QPen
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem
 
 from skyview.canvas.screen_overlay import draw_screen_diamond
@@ -21,7 +21,7 @@ class DxfPathItem(QGraphicsPathItem):
 
     TYPE = "dxf_entity"
 
-    def __init__(self, record: EntityRecord, dark: bool = True, *, cache_path: bool = False):
+    def __init__(self, record: EntityRecord, dark: bool = True, *, use_lod: bool = False):
         super().__init__(record.path)
         self.record = record
         self._dark = dark
@@ -29,23 +29,46 @@ class DxfPathItem(QGraphicsPathItem):
         self._snap_highlight: str | None = None
         self._base_color = adjust_entity_color(record.color, dark)
         self._cached_shape = None
+        self._use_lod = use_lod and record.path_lod is not None
+        self._viewport_detailed = True
         self.setPen(make_pen(self._base_color, 1.0))
         self.setBrush(Qt.BrushStyle.NoBrush)
         self.setFlag(QGraphicsPathItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(False)
         self.setData(0, self.TYPE)
         self.setData(1, record.handle)
-        if cache_path:
+        self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
+
+    def set_viewport_detail(self, detailed: bool) -> None:
+        """Видимые объекты — полный контур; вне экрана — LOD + кэш."""
+        if not self._use_lod:
+            detailed = True
+        if self._selected or self._snap_highlight:
+            detailed = True
+        if self._viewport_detailed == detailed:
+            return
+        self._viewport_detailed = detailed
+        lod = self.record.path_lod
+        if detailed or lod is None:
+            self.setPath(self.record.path)
+            self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
+        else:
+            self.setPath(lod)
             self.setCacheMode(QGraphicsItem.CacheMode.ItemCoordinateCache)
+        self.update()
 
     def set_highlight(self, on: bool) -> None:
         self._selected = on
         self._apply_pen()
+        if on:
+            self.set_viewport_detail(True)
         self.update()
 
     def set_snap_highlight(self, kind: str | None) -> None:
         self._snap_highlight = kind
         self._apply_pen()
+        if kind:
+            self.set_viewport_detail(True)
         self.update()
 
     def set_dark_mode(self, dark: bool) -> None:
@@ -103,6 +126,9 @@ class DxfPathItem(QGraphicsPathItem):
         return self._cached_shape
 
     def paint(self, painter, option, widget=None) -> None:
+        if self._viewport_detailed:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         super().paint(painter, option, widget)
         if not self._selected:
             return

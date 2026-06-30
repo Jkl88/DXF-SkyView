@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent, QPainter, QWheelEvent
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
 
@@ -73,14 +73,14 @@ class DxfScene(QGraphicsScene):
 
     def add_records(self, records) -> list[DxfPathItem]:
         count = len(records)
-        cache_paths = count >= 1500
+        use_lod = count >= 800
         block = count >= 500
         if block:
             self.blockSignals(True)
         try:
             items: list[DxfPathItem] = []
             for rec in records:
-                item = DxfPathItem(rec, dark=self._dark, cache_path=cache_paths)
+                item = DxfPathItem(rec, dark=self._dark, use_lod=use_lod)
                 self.addItem(item)
                 items.append(item)
             self._items = items
@@ -94,15 +94,32 @@ class DxfScene(QGraphicsScene):
                 self.blockSignals(False)
 
     def restore_records(self, records: list[EntityRecord]) -> list[DxfPathItem]:
-        cache_paths = len(self._items) + len(records) >= 1500
+        use_lod = len(self._items) + len(records) >= 800
         restored = []
         for rec in records:
-            item = DxfPathItem(rec, dark=self._dark, cache_path=cache_paths)
+            item = DxfPathItem(rec, dark=self._dark, use_lod=use_lod)
             self.addItem(item)
             self._items.append(item)
             restored.append(item)
         self._records_cache = None
         return restored
+
+    def update_viewport_lod(self, visible_rect: QRectF) -> None:
+        if visible_rect.isEmpty():
+            return
+        visible_items = {
+            item
+            for item in self.items(
+                visible_rect,
+                Qt.ItemSelectionMode.IntersectsItemBoundingRect,
+            )
+            if isinstance(item, DxfPathItem)
+        }
+        selected = set(self._selected)
+        highlighted = set(self._snap_highlighted)
+        for item in self._items:
+            detailed = item in visible_items or item in selected or item in highlighted
+            item.set_viewport_detail(detailed)
 
     def set_dark_mode(self, dark: bool) -> None:
         self._dark = dark
@@ -222,8 +239,13 @@ class DxfCanvas(QGraphicsView):
         self._panning = False
         self._pan_start = QPointF()
         self._last_snap_viewport_pos: QPointF | None = None
+        self._lod_enabled = False
+        self._lod_timer = QTimer(self)
+        self._lod_timer.setSingleShot(True)
+        self._lod_timer.timeout.connect(self._update_viewport_lod)
 
     def _apply_render_quality(self, record_count: int) -> None:
+        self._lod_enabled = record_count >= 800
         hints = QPainter.RenderHint.SmoothPixmapTransform
         if record_count < 1500:
             hints |= QPainter.RenderHint.Antialiasing
@@ -232,7 +254,7 @@ class DxfCanvas(QGraphicsView):
             QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate
             if record_count >= 8000
             else QGraphicsView.ViewportUpdateMode.MinimalViewportUpdate
-            if record_count >= 1500
+            if record_count >= 800
             else QGraphicsView.ViewportUpdateMode.SmartViewportUpdate
         )
         self.setViewportUpdateMode(mode)
@@ -268,6 +290,7 @@ class DxfCanvas(QGraphicsView):
         self._update_viewport_overlays()
         self._scene.clear_selection()
         self.selection_changed.emit([])
+        self._update_viewport_lod()
 
     def content_size(self) -> tuple[float, float]:
         return records_size([item.record for item in self._scene.all_items()])
@@ -312,6 +335,7 @@ class DxfCanvas(QGraphicsView):
             Qt.AspectRatioMode.KeepAspectRatio,
         )
         self._update_viewport_overlays()
+        self._update_viewport_lod()
 
     def _scale_factor(self) -> float:
         return abs(self.transform().m11()) or 1.0
@@ -363,6 +387,22 @@ class DxfCanvas(QGraphicsView):
 
     def _visible_scene_rect(self) -> QRectF:
         return self.mapToScene(self.viewport().rect()).boundingRect()
+
+    def _lod_scene_rect(self) -> QRectF:
+        rect = self._visible_scene_rect()
+        if rect.isEmpty():
+            return rect
+        margin = 80.0 / max(self._scale_factor(), 1e-6)
+        return rect.adjusted(-margin, -margin, margin, margin)
+
+    def _schedule_lod_update(self) -> None:
+        if self._lod_enabled:
+            self._lod_timer.start(40)
+
+    def _update_viewport_lod(self) -> None:
+        if not self._lod_enabled:
+            return
+        self._scene.update_viewport_lod(self._lod_scene_rect())
 
     def _resolve_point(self, scene_pos: QPointF) -> tuple[QPointF, object]:
         viewport_pos = self.mapFromScene(scene_pos)
@@ -527,6 +567,7 @@ class DxfCanvas(QGraphicsView):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         self.scale(factor, factor)
         self._update_viewport_overlays()
+        self._update_viewport_lod()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:
@@ -590,6 +631,7 @@ class DxfCanvas(QGraphicsView):
                 int(self.verticalScrollBar().value() - delta.y())
             )
             self._update_viewport_overlays()
+            self._schedule_lod_update()
             event.accept()
             return
 
@@ -641,6 +683,7 @@ class DxfCanvas(QGraphicsView):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._update_viewport_overlays()
+        self._schedule_lod_update()
 
     @staticmethod
     def _cad_from_mime(mime) -> str | None:
