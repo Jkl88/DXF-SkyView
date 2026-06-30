@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QSize
 from PySide6.QtGui import (
@@ -659,18 +660,33 @@ class MainWindow(QMainWindow):
             self._show_update_result(False, "Файл обновления не получен.", False)
             return
 
-        path = Path(str(installer_path))
-        hwnd = int(self.winId())
-        ok, launch_message = apply_downloaded_release(path, hwnd)
+        try:
+            path = Path(str(installer_path))
+            hwnd = int(self.winId())
+            ok, launch_message = apply_downloaded_release(path, hwnd)
+        except Exception as exc:
+            self._show_update_result(
+                False,
+                f"Не удалось запустить установку обновления:\n{exc}",
+                False,
+            )
+            return
+
         if ok:
             QApplication.processEvents()
-        self._show_update_result(ok, launch_message if ok else launch_message, ok)
+        self._show_update_result(ok, launch_message, ok)
 
     def _show_update_result(self, ok: bool, message: str, quit_app: bool) -> None:
         if ok:
             if quit_app:
                 if is_frozen_app():
-                    QTimer.singleShot(1200, lambda: os._exit(0))
+                    QMessageBox.information(
+                        self,
+                        "Обновление",
+                        f"{message}\n\nПриложение закроется для установки.\n"
+                        "Подтвердите запрос UAC, если появится.",
+                    )
+                    QTimer.singleShot(400, lambda: os._exit(0))
                     return
                 QMessageBox.information(self, "Обновление", message)
                 QApplication.instance().quit()
