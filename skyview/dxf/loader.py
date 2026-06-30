@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor, QPainterPath, QPen
 from pathlib import Path
 
 from skyview.dxf.bounds import entity_scene_bounds, records_dxf_extents
+from skyview.dxf.geometry import entity_to_qpainter_path, pick_distance_to_entity
 from skyview.dxf.segments import collect_line_segments_for_entity, path_to_pick_segments
 from skyview.dxf.units import read_units
 
@@ -40,9 +41,15 @@ class EntityRecord:
     color: QColor
     path: QPainterPath
     entity: Any
-    properties: dict[str, Any] = field(default_factory=dict)
+    properties: dict[str, Any] | None = field(default=None, repr=False)
     bounds: QRectF = field(default_factory=QRectF)
     pick_segments: list[tuple[QPointF, QPointF]] = field(default_factory=list)
+    analytic_pick: bool = False
+
+    def get_properties(self) -> dict[str, Any]:
+        if self.properties is None:
+            self.properties = _entity_properties(self.entity)
+        return self.properties
 
 
 def _aci_to_color(aci: int) -> QColor:
@@ -76,7 +83,7 @@ def _entity_color(entity, doc) -> QColor:
 
 
 def _path_to_qpainter(ez_path, flatten: float = 0.05) -> QPainterPath:
-    """Конвертация ezdxf Path в QPainterPath с корректными дугами."""
+    """Конвертация ezdxf Path в QPainterPath (fallback через flatten)."""
     qp = QPainterPath()
     started = False
     for v in ez_path.flattening(distance=flatten):
@@ -87,6 +94,20 @@ def _path_to_qpainter(ez_path, flatten: float = 0.05) -> QPainterPath:
         else:
             qp.lineTo(pt)
     return qp
+
+
+def _choose_flatten(entity_count: int) -> float:
+    if entity_count > 100_000:
+        return 1.0
+    if entity_count > 50_000:
+        return 0.6
+    if entity_count > 20_000:
+        return 0.35
+    if entity_count > 8_000:
+        return 0.2
+    if entity_count > 3_000:
+        return 0.1
+    return 0.05
 
 
 def _collect_entities(msp, doc) -> list[Any]:
@@ -188,33 +209,37 @@ def _entity_properties(entity) -> dict[str, Any]:
 
 
 def _make_record(entity, doc, flatten: float) -> EntityRecord | None:
-    ezdxf, ezdxf_path = _import_ezdxf()
-    try:
-        ez_path = ezdxf_path.make_path(entity)
-    except (TypeError, ValueError, ezdxf.DXFTypeError):
-        return None
-
-    if ez_path.has_sub_paths and len(ez_path) == 0:
-        return None
-
-    qp = _path_to_qpainter(ez_path, flatten)
-    if qp.isEmpty():
-        return None
+    dxftype = entity.dxftype()
+    qp = entity_to_qpainter_path(entity, flatten)
+    if qp is None or qp.isEmpty():
+        ezdxf, ezdxf_path = _import_ezdxf()
+        try:
+            ez_path = ezdxf_path.make_path(entity)
+        except (TypeError, ValueError, ezdxf.DXFTypeError):
+            return None
+        if ez_path.has_sub_paths and len(ez_path) == 0:
+            return None
+        qp = _path_to_qpainter(ez_path, flatten)
+        if qp.isEmpty():
+            return None
 
     color = _entity_color(entity, doc)
     rec = EntityRecord(
         handle=entity.dxf.handle,
-        entity_type=entity.dxftype(),
+        entity_type=dxftype,
         layer=entity.dxf.layer,
         color=color,
         path=qp,
         entity=entity,
-        properties=_entity_properties(entity),
         bounds=entity_scene_bounds(entity) or qp.boundingRect(),
     )
-    rec.pick_segments = path_to_pick_segments(qp)
-    if not rec.pick_segments and rec.entity_type in ("LINE", "LWPOLYLINE", "POLYLINE"):
+
+    if dxftype in ("LINE", "CIRCLE", "ARC"):
+        rec.analytic_pick = True
+    if dxftype in ("LINE", "LWPOLYLINE", "POLYLINE"):
         rec.pick_segments = collect_line_segments_for_entity(entity)
+    if not rec.pick_segments and not rec.analytic_pick:
+        rec.pick_segments = path_to_pick_segments(qp)
     return rec
 
 
@@ -274,15 +299,7 @@ def load_cad(filepath: str, flatten: float | None = None) -> DxfDocument:
 
     entities = _collect_entities(msp, doc)
     if flatten is None:
-        count = len(entities)
-        if count > 20000:
-            flatten = 0.35
-        elif count > 8000:
-            flatten = 0.2
-        elif count > 3000:
-            flatten = 0.1
-        else:
-            flatten = 0.05
+        flatten = _choose_flatten(len(entities))
 
     records: list[EntityRecord] = []
     for entity in entities:

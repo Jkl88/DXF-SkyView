@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor, QPainterPathStroker, QPen
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem
 
 from skyview.canvas.screen_overlay import draw_screen_diamond
+from skyview.dxf.geometry import pick_distance_to_entity
 from skyview.dxf.loader import EntityRecord, make_pen
 from skyview.ui.theme import adjust_entity_color, guide_line_color
 from skyview.dxf.segments import nearest_pick_distance
@@ -20,7 +21,7 @@ class DxfPathItem(QGraphicsPathItem):
 
     TYPE = "dxf_entity"
 
-    def __init__(self, record: EntityRecord, dark: bool = True):
+    def __init__(self, record: EntityRecord, dark: bool = True, *, cache_path: bool = False):
         super().__init__(record.path)
         self.record = record
         self._dark = dark
@@ -34,6 +35,8 @@ class DxfPathItem(QGraphicsPathItem):
         self.setAcceptHoverEvents(False)
         self.setData(0, self.TYPE)
         self.setData(1, record.handle)
+        if cache_path:
+            self.setCacheMode(QGraphicsItem.CacheMode.ItemCoordinateCache)
 
     def set_highlight(self, on: bool) -> None:
         self._selected = on
@@ -80,6 +83,10 @@ class DxfPathItem(QGraphicsPathItem):
         return dist is not None and dist <= tol
 
     def pick_distance(self, scene_pos: QPointF) -> float | None:
+        if self.record.analytic_pick:
+            dist = pick_distance_to_entity(scene_pos, self.record.entity)
+            if dist is not None:
+                return dist
         if self.record.pick_segments:
             return nearest_pick_distance(scene_pos, self.record.pick_segments)
         if self.shape().contains(scene_pos):

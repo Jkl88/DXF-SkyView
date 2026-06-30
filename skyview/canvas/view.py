@@ -72,22 +72,32 @@ class DxfScene(QGraphicsScene):
             self._snap_highlighted.append(item)
 
     def add_records(self, records) -> list[DxfPathItem]:
-        items = []
-        for rec in records:
-            item = DxfPathItem(rec, dark=self._dark)
-            self.addItem(item)
-            items.append(item)
-        self._items = items
-        self._records_cache = None
-        if items:
-            depth = int(max(6, min(12, math.log2(len(items) + 1) + 4)))
-            self.setBspTreeDepth(depth)
-        return items
+        count = len(records)
+        cache_paths = count >= 3000
+        block = count >= 500
+        if block:
+            self.blockSignals(True)
+        try:
+            items: list[DxfPathItem] = []
+            for rec in records:
+                item = DxfPathItem(rec, dark=self._dark, cache_path=cache_paths)
+                self.addItem(item)
+                items.append(item)
+            self._items = items
+            self._records_cache = None
+            if items:
+                depth = int(max(6, min(12, math.log2(len(items) + 1) + 4)))
+                self.setBspTreeDepth(depth)
+            return items
+        finally:
+            if block:
+                self.blockSignals(False)
 
     def restore_records(self, records: list[EntityRecord]) -> list[DxfPathItem]:
+        cache_paths = len(self._items) + len(records) >= 3000
         restored = []
         for rec in records:
-            item = DxfPathItem(rec, dark=self._dark)
+            item = DxfPathItem(rec, dark=self._dark, cache_path=cache_paths)
             self.addItem(item)
             self._items.append(item)
             restored.append(item)
@@ -211,6 +221,19 @@ class DxfCanvas(QGraphicsView):
 
         self._panning = False
         self._pan_start = QPointF()
+        self._last_snap_viewport_pos: QPointF | None = None
+
+    def _apply_render_quality(self, record_count: int) -> None:
+        hints = QPainter.RenderHint.SmoothPixmapTransform
+        if record_count < 8000:
+            hints |= QPainter.RenderHint.Antialiasing
+        self.setRenderHints(hints)
+        mode = (
+            QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate
+            if record_count >= 12_000
+            else QGraphicsView.ViewportUpdateMode.SmartViewportUpdate
+        )
+        self.setViewportUpdateMode(mode)
 
     @property
     def document(self) -> DxfDocument | None:
@@ -223,16 +246,21 @@ class DxfCanvas(QGraphicsView):
     def load_document(self, doc: DxfDocument) -> None:
         self._doc = doc
         self._undo.clear()
-        self._scene.clear_all()
-        self._scene.add_records(doc.records)
-        self._snap_engine.set_records(doc.records)
+        self._apply_render_quality(len(doc.records))
+        self.setUpdatesEnabled(False)
+        try:
+            self._scene.clear_all()
+            self._scene.add_records(doc.records)
+            self._snap_engine.set_records(doc.records)
 
-        if self._measure is None:
-            self._measure = MeasureOverlay(doc.unit_short)
-            self._scene.addItem(self._measure)
-        else:
-            self._measure.set_unit(doc.unit_short)
-            self._measure.reset()
+            if self._measure is None:
+                self._measure = MeasureOverlay(doc.unit_short)
+                self._scene.addItem(self._measure)
+            else:
+                self._measure.set_unit(doc.unit_short)
+                self._measure.reset()
+        finally:
+            self.setUpdatesEnabled(True)
 
         self.fit_to_view()
         self._update_viewport_overlays()
@@ -335,10 +363,24 @@ class DxfCanvas(QGraphicsView):
         return self.mapToScene(self.viewport().rect()).boundingRect()
 
     def _resolve_point(self, scene_pos: QPointF) -> tuple[QPointF, object]:
-        snap = self._snap_engine.snap(
-            scene_pos, self._scale_factor(), self._visible_scene_rect()
-        )
-        self._last_snap_result = snap
+        viewport_pos = self.mapFromScene(scene_pos)
+        if self._last_snap_viewport_pos is not None:
+            dx = viewport_pos.x() - self._last_snap_viewport_pos.x()
+            dy = viewport_pos.y() - self._last_snap_viewport_pos.y()
+            if dx * dx + dy * dy < 4.0:
+                snap = self._last_snap_result
+            else:
+                snap = self._snap_engine.snap(
+                    scene_pos, self._scale_factor(), self._visible_scene_rect()
+                )
+                self._last_snap_result = snap
+                self._last_snap_viewport_pos = viewport_pos
+        else:
+            snap = self._snap_engine.snap(
+                scene_pos, self._scale_factor(), self._visible_scene_rect()
+            )
+            self._last_snap_result = snap
+            self._last_snap_viewport_pos = viewport_pos
         records = self._scene.all_records()
 
         measure_ctx = None
@@ -479,6 +521,7 @@ class DxfCanvas(QGraphicsView):
         return scene_pos, None
 
     def wheelEvent(self, event: QWheelEvent) -> None:
+        self._last_snap_viewport_pos = None
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         self.scale(factor, factor)
         self._update_viewport_overlays()

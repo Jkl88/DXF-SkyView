@@ -158,6 +158,7 @@ class MainWindow(QMainWindow):
         self._update_checked_on_start = False
         self._update_thread: UpdateCheckThread | None = None
         self._install_thread: UpdateInstallThread | None = None
+        self._load_worker = None
         self._toolbar: QToolBar | None = None
         self._edit_btn: QToolButton | None = None
 
@@ -298,17 +299,51 @@ class MainWindow(QMainWindow):
             self.bring_to_front()
             return
 
-        from skyview.dxf.loader import load_cad
+        abs_path = absolute_path(path)
+        self._start_load(abs_path)
 
-        try:
-            doc = load_cad(path)
-        except Exception as exc:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл:\n{exc}")
+    def _start_load(self, abs_path: str) -> None:
+        from skyview.dxf.load_worker import CadLoadWorker
+
+        if self._load_worker is not None and self._load_worker.isRunning():
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                "Дождитесь завершения текущей загрузки файла.",
+            )
             return
 
-        abs_path = absolute_path(path)
+        name = os.path.basename(abs_path)
+        progress = QProgressDialog(f"Загрузка {name}…", None, 0, 0, self)
+        progress.setWindowTitle(APP_NAME)
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.show()
+        QApplication.processEvents()
+
+        worker = CadLoadWorker(abs_path, self)
+        worker.finished_ok.connect(
+            lambda doc, loaded_path, dlg=progress, w=worker: self._on_load_finished(
+                doc, loaded_path, dlg, w
+            )
+        )
+        worker.failed.connect(
+            lambda msg, loaded_path=abs_path, dlg=progress, w=worker: self._on_load_failed(
+                msg, loaded_path, dlg, w
+            )
+        )
+        self._load_worker = worker
+        worker.start()
+
+    def _on_load_finished(self, doc, path: str, progress: QProgressDialog, worker) -> None:
+        progress.close()
+        worker.deleteLater()
+        if worker is self._load_worker:
+            self._load_worker = None
+
         canvas = self._create_tab_canvas()
-        tab = _DocTab(canvas=canvas, filepath=abs_path, modified=False)
+        tab = _DocTab(canvas=canvas, filepath=path, modified=False)
         self._tab_docs[canvas] = tab
 
         index = self._tabs.addTab(canvas, tab.tab_text())
@@ -319,6 +354,19 @@ class MainWindow(QMainWindow):
         self._update_status_for_tab(tab)
         self._update_window_title()
         self.bring_to_front()
+
+    def _on_load_failed(
+        self, message: str, path: str, progress: QProgressDialog, worker
+    ) -> None:
+        progress.close()
+        worker.deleteLater()
+        if worker is self._load_worker:
+            self._load_worker = None
+        QMessageBox.critical(
+            self,
+            "Ошибка",
+            f"Не удалось открыть файл:\n{os.path.basename(path)}\n\n{message}",
+        )
 
     def _on_tab_modified(self, canvas: DxfCanvas) -> None:
         tab = self._tab_docs.get(canvas)
@@ -810,7 +858,7 @@ class MainWindow(QMainWindow):
 
     def _on_selection_changed(self, records: list) -> None:
         if records:
-            props = [r.properties for r in records]
+            props = [r.get_properties() for r in records]
             self._properties.show_properties(props)
         else:
             canvas = self._active_canvas()

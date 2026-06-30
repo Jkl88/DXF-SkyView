@@ -10,6 +10,7 @@ from PySide6.QtCore import QPointF, QRectF
 
 from skyview.dxf.loader import EntityRecord
 from skyview.dxf.segments import nearest_on_segment, snap_line_segments
+from skyview.tools.spatial_index import RecordSpatialIndex
 
 
 class SnapMode(Enum):
@@ -308,9 +309,11 @@ class SnapEngine:
     def __init__(self, settings: SnapSettings | None = None):
         self.settings = settings or SnapSettings()
         self._records: list[EntityRecord] = []
+        self._index: RecordSpatialIndex | None = None
 
     def set_records(self, records: list[EntityRecord]) -> None:
         self._records = records
+        self._index = RecordSpatialIndex.build(records)
 
     def _search_rect(
         self, cursor_scene: QPointF, tol: float, visible_rect: QRectF | None
@@ -333,8 +336,13 @@ class SnapEngine:
         if search.isEmpty():
             return []
         pad = max(tol, 1e-6)
+        source = (
+            self._index.query_rect(search)
+            if self._index is not None
+            else self._records
+        )
         result: list[EntityRecord] = []
-        for record in self._records:
+        for record in source:
             bounds = record.bounds
             if bounds.isNull():
                 result.append(record)
