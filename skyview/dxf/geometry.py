@@ -7,10 +7,47 @@ import math
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QPainterPath
 
+from dataclasses import dataclass
+
 from skyview.dxf.segments import nearest_on_segment, to_qt
 
 _SPLINE_MAX_POINTS_DEFAULT = 64
 _SPLINE_MAX_POINTS_DENSE = 36
+_SPLINE_MAX_POINTS_HD = 128
+
+
+@dataclass(frozen=True)
+class LodProfile:
+    """Параметры упрощения в зависимости от размера чертежа."""
+
+    spline_hd: int
+    spline_visible: int
+    spline_lod: int
+    spline_minimal: int
+    path_lod: int
+    path_minimal: int
+    enable_viewport_lod: bool
+
+
+def lod_profile(entity_count: int, spline_count: int) -> LodProfile:
+    """Чем больше объектов — тем грубее контуры и меньше точек."""
+    dense_splines = spline_count >= 150
+
+    if entity_count < 500:
+        return LodProfile(128, 128, 48, 24, 28, 12, False)
+
+    if entity_count < 1500:
+        hd, vis, lod, mini = (96, 72, 18, 8) if dense_splines else (112, 96, 28, 12)
+        return LodProfile(hd, vis, lod, mini, 14, 5, True)
+
+    if entity_count < 5000:
+        hd, vis, lod, mini = (64, 52, 12, 5) if dense_splines else (80, 64, 18, 8)
+        return LodProfile(hd, vis, lod, mini, 10, 4, True)
+
+    if entity_count < 20_000:
+        return LodProfile(48, 40, 10, 4, 8, 3, True)
+
+    return LodProfile(36, 28, 8, 3, 6, 2, True)
 
 
 def _subsample_points(points: list[QPointF], max_points: int) -> list[QPointF]:
@@ -20,9 +57,6 @@ def _subsample_points(points: list[QPointF], max_points: int) -> list[QPointF]:
         return points[:1]
     last = len(points) - 1
     return [points[int(i * last / (max_points - 1))] for i in range(max_points)]
-
-
-_SPLINE_MAX_POINTS_HD = 128
 
 
 def simplify_qpainter_path(path: QPainterPath, max_points: int = 32) -> QPainterPath:
@@ -51,11 +85,7 @@ def simplify_qpainter_path(path: QPainterPath, max_points: int = 32) -> QPainter
 
 
 def _spline_max_points(entity_count: int, spline_count: int) -> int:
-    if spline_count >= 200 or entity_count >= 1500:
-        return _SPLINE_MAX_POINTS_DENSE
-    if spline_count >= 80:
-        return 48
-    return _SPLINE_MAX_POINTS_DEFAULT
+    return lod_profile(entity_count, spline_count).spline_lod
 
 
 def _dxf_y(y: float) -> float:

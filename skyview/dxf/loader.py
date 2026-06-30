@@ -13,11 +13,11 @@ from pathlib import Path
 
 from skyview.dxf.bounds import entity_scene_bounds, records_dxf_extents
 from skyview.dxf.geometry import (
-    _SPLINE_MAX_POINTS_HD,
+    LodProfile,
     _subsample_points,
-    _spline_max_points,
     _spline_path_from_points,
     entity_to_qpainter_path,
+    lod_profile,
     simplify_qpainter_path,
     spline_path_points,
 )
@@ -50,6 +50,7 @@ class EntityRecord:
     path: QPainterPath
     entity: Any
     path_lod: QPainterPath | None = field(default=None, repr=False)
+    path_minimal: QPainterPath | None = field(default=None, repr=False)
     properties: dict[str, Any] | None = field(default=None, repr=False)
     bounds: QRectF = field(default_factory=QRectF)
     pick_segments: list[tuple[QPointF, QPointF]] = field(default_factory=list)
@@ -217,26 +218,31 @@ def _entity_properties(entity) -> dict[str, Any]:
     return props
 
 
-def _attach_path_lod(rec: EntityRecord) -> None:
+def _attach_path_lod(rec: EntityRecord, profile: LodProfile) -> None:
     dxftype = rec.entity_type
     if dxftype == "SPLINE":
         return
     if dxftype in ("TEXT", "MTEXT"):
-        rec.path_lod = simplify_qpainter_path(rec.path, max_points=20)
+        rec.path_lod = simplify_qpainter_path(rec.path, max_points=profile.path_lod)
+        rec.path_minimal = simplify_qpainter_path(rec.path, max_points=profile.path_minimal)
         return
-    if rec.path.elementCount() > 48:
-        rec.path_lod = simplify_qpainter_path(rec.path, max_points=28)
+    if rec.path.elementCount() > 24:
+        rec.path_lod = simplify_qpainter_path(rec.path, max_points=profile.path_lod)
+        rec.path_minimal = simplify_qpainter_path(rec.path, max_points=profile.path_minimal)
 
 
-def _make_record(entity, doc, flatten: float, *, spline_max_points: int) -> EntityRecord | None:
+def _make_record(entity, doc, flatten: float, *, profile: LodProfile) -> EntityRecord | None:
     dxftype = entity.dxftype()
 
     if dxftype == "SPLINE":
-        points_hd = spline_path_points(entity, flatten, _SPLINE_MAX_POINTS_HD)
-        points_lod = _subsample_points(points_hd, spline_max_points)
-        qp_hd = _spline_path_from_points(points_hd)
+        points_hd = spline_path_points(entity, flatten, profile.spline_hd)
+        points_vis = _subsample_points(points_hd, profile.spline_visible)
+        points_lod = _subsample_points(points_hd, profile.spline_lod)
+        points_mini = _subsample_points(points_hd, profile.spline_minimal)
+        qp_vis = _spline_path_from_points(points_vis)
         qp_lod = _spline_path_from_points(points_lod)
-        if qp_hd is None or qp_hd.isEmpty():
+        qp_mini = _spline_path_from_points(points_mini)
+        if qp_vis is None or qp_vis.isEmpty():
             return None
         color = _entity_color(entity, doc)
         rec = EntityRecord(
@@ -244,20 +250,21 @@ def _make_record(entity, doc, flatten: float, *, spline_max_points: int) -> Enti
             entity_type=dxftype,
             layer=entity.dxf.layer,
             color=color,
-            path=qp_hd,
-            path_lod=qp_lod or qp_hd,
+            path=qp_vis,
+            path_lod=qp_lod or qp_vis,
+            path_minimal=qp_mini or qp_lod or qp_vis,
             entity=entity,
-            bounds=entity_scene_bounds(entity) or qp_hd.boundingRect(),
+            bounds=entity_scene_bounds(entity) or qp_vis.boundingRect(),
         )
         rec.pick_segments = [
-            (points_hd[i], points_hd[i + 1]) for i in range(len(points_hd) - 1)
+            (points_vis[i], points_vis[i + 1]) for i in range(len(points_vis) - 1)
         ]
         return rec
 
     qp = entity_to_qpainter_path(
         entity,
         flatten,
-        spline_max_points=spline_max_points,
+        spline_max_points=profile.spline_lod,
     )
     if qp is None or qp.isEmpty():
         ezdxf, ezdxf_path = _import_ezdxf()
@@ -288,7 +295,7 @@ def _make_record(entity, doc, flatten: float, *, spline_max_points: int) -> Enti
         rec.pick_segments = collect_line_segments_for_entity(entity)
     if not rec.pick_segments and not rec.analytic_pick:
         rec.pick_segments = path_to_pick_segments(qp)
-    _attach_path_lod(rec)
+    _attach_path_lod(rec, profile)
     return rec
 
 
@@ -351,7 +358,7 @@ def load_cad(filepath: str, flatten: float | None = None) -> DxfDocument:
         flatten = _choose_flatten(len(entities))
 
     spline_count = sum(1 for entity in entities if entity.dxftype() == "SPLINE")
-    spline_max_points = _spline_max_points(len(entities), spline_count)
+    profile = lod_profile(len(entities), spline_count)
 
     records: list[EntityRecord] = []
     for entity in entities:
@@ -359,7 +366,7 @@ def load_cad(filepath: str, flatten: float | None = None) -> DxfDocument:
             entity,
             doc,
             flatten,
-            spline_max_points=spline_max_points,
+            profile=profile,
         )
         if rec:
             records.append(rec)

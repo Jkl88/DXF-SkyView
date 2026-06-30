@@ -29,7 +29,9 @@ class DxfPathItem(QGraphicsPathItem):
         self._snap_highlight: str | None = None
         self._base_color = adjust_entity_color(record.color, dark)
         self._cached_shape = None
-        self._use_lod = use_lod and record.path_lod is not None
+        self._use_lod = use_lod and (
+            record.path_lod is not None or record.path_minimal is not None
+        )
         self._viewport_detailed = True
         self.setPen(make_pen(self._base_color, 1.0))
         self.setBrush(Qt.BrushStyle.NoBrush)
@@ -48,12 +50,12 @@ class DxfPathItem(QGraphicsPathItem):
         if self._viewport_detailed == detailed:
             return
         self._viewport_detailed = detailed
-        lod = self.record.path_lod
-        if detailed or lod is None:
+        if detailed:
             self.setPath(self.record.path)
             self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
         else:
-            self.setPath(lod)
+            offscreen = self.record.path_minimal or self.record.path_lod
+            self.setPath(offscreen if offscreen is not None else self.record.path)
             self.setCacheMode(QGraphicsItem.CacheMode.ItemCoordinateCache)
         self.update()
 

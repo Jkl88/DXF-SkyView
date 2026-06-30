@@ -73,7 +73,7 @@ class DxfScene(QGraphicsScene):
 
     def add_records(self, records) -> list[DxfPathItem]:
         count = len(records)
-        use_lod = count >= 800
+        use_lod = count >= 500
         block = count >= 500
         if block:
             self.blockSignals(True)
@@ -94,7 +94,7 @@ class DxfScene(QGraphicsScene):
                 self.blockSignals(False)
 
     def restore_records(self, records: list[EntityRecord]) -> list[DxfPathItem]:
-        use_lod = len(self._items) + len(records) >= 800
+        use_lod = len(self._items) + len(records) >= 500
         restored = []
         for rec in records:
             item = DxfPathItem(rec, dark=self._dark, use_lod=use_lod)
@@ -245,7 +245,7 @@ class DxfCanvas(QGraphicsView):
         self._lod_timer.timeout.connect(self._update_viewport_lod)
 
     def _apply_render_quality(self, record_count: int) -> None:
-        self._lod_enabled = record_count >= 800
+        self._lod_enabled = record_count >= 500
         hints = QPainter.RenderHint.SmoothPixmapTransform
         if record_count < 1500:
             hints |= QPainter.RenderHint.Antialiasing
@@ -254,7 +254,7 @@ class DxfCanvas(QGraphicsView):
             QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate
             if record_count >= 8000
             else QGraphicsView.ViewportUpdateMode.MinimalViewportUpdate
-            if record_count >= 800
+            if record_count >= 500
             else QGraphicsView.ViewportUpdateMode.SmartViewportUpdate
         )
         self.setViewportUpdateMode(mode)
