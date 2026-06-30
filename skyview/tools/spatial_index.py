@@ -20,7 +20,7 @@ class RecordSpatialIndex:
 
     @classmethod
     def build(cls, records: list[EntityRecord]) -> RecordSpatialIndex | None:
-        if len(records) < 2500:
+        if len(records) < 800:
             return None
         extents = _records_extents(records)
         if extents is None:

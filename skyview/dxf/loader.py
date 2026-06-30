@@ -12,7 +12,12 @@ from PySide6.QtGui import QColor, QPainterPath, QPen
 from pathlib import Path
 
 from skyview.dxf.bounds import entity_scene_bounds, records_dxf_extents
-from skyview.dxf.geometry import entity_to_qpainter_path, pick_distance_to_entity
+from skyview.dxf.geometry import (
+    _spline_max_points,
+    _spline_path_from_points,
+    entity_to_qpainter_path,
+    spline_path_points,
+)
 from skyview.dxf.segments import collect_line_segments_for_entity, path_to_pick_segments
 from skyview.dxf.units import read_units
 
@@ -208,9 +213,34 @@ def _entity_properties(entity) -> dict[str, Any]:
     return props
 
 
-def _make_record(entity, doc, flatten: float) -> EntityRecord | None:
+def _make_record(entity, doc, flatten: float, *, spline_max_points: int) -> EntityRecord | None:
     dxftype = entity.dxftype()
-    qp = entity_to_qpainter_path(entity, flatten)
+
+    if dxftype == "SPLINE":
+        points = spline_path_points(entity, flatten, spline_max_points)
+        qp = _spline_path_from_points(points)
+        if qp is None or qp.isEmpty():
+            return None
+        color = _entity_color(entity, doc)
+        rec = EntityRecord(
+            handle=entity.dxf.handle,
+            entity_type=dxftype,
+            layer=entity.dxf.layer,
+            color=color,
+            path=qp,
+            entity=entity,
+            bounds=entity_scene_bounds(entity) or qp.boundingRect(),
+        )
+        rec.pick_segments = [
+            (points[i], points[i + 1]) for i in range(len(points) - 1)
+        ]
+        return rec
+
+    qp = entity_to_qpainter_path(
+        entity,
+        flatten,
+        spline_max_points=spline_max_points,
+    )
     if qp is None or qp.isEmpty():
         ezdxf, ezdxf_path = _import_ezdxf()
         try:
@@ -301,9 +331,17 @@ def load_cad(filepath: str, flatten: float | None = None) -> DxfDocument:
     if flatten is None:
         flatten = _choose_flatten(len(entities))
 
+    spline_count = sum(1 for entity in entities if entity.dxftype() == "SPLINE")
+    spline_max_points = _spline_max_points(len(entities), spline_count)
+
     records: list[EntityRecord] = []
     for entity in entities:
-        rec = _make_record(entity, doc, flatten)
+        rec = _make_record(
+            entity,
+            doc,
+            flatten,
+            spline_max_points=spline_max_points,
+        )
         if rec:
             records.append(rec)
 

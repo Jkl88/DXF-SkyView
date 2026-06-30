@@ -9,6 +9,26 @@ from PySide6.QtGui import QPainterPath
 
 from skyview.dxf.segments import nearest_on_segment, to_qt
 
+_SPLINE_MAX_POINTS_DEFAULT = 64
+_SPLINE_MAX_POINTS_DENSE = 36
+
+
+def _subsample_points(points: list[QPointF], max_points: int) -> list[QPointF]:
+    if len(points) <= max_points:
+        return points
+    if max_points < 2:
+        return points[:1]
+    last = len(points) - 1
+    return [points[int(i * last / (max_points - 1))] for i in range(max_points)]
+
+
+def _spline_max_points(entity_count: int, spline_count: int) -> int:
+    if spline_count >= 200 or entity_count >= 1500:
+        return _SPLINE_MAX_POINTS_DENSE
+    if spline_count >= 80:
+        return 48
+    return _SPLINE_MAX_POINTS_DEFAULT
+
 
 def _dxf_y(y: float) -> float:
     return -y
@@ -83,7 +103,33 @@ def _path_from_ezdxf_commands(ez_path) -> QPainterPath | None:
     return qp
 
 
-def entity_to_qpainter_path(entity, flatten: float) -> QPainterPath | None:
+def _spline_path_from_points(points: list[QPointF]) -> QPainterPath | None:
+    if not points:
+        return None
+    path = QPainterPath(points[0])
+    for point in points[1:]:
+        path.lineTo(point)
+    return path
+
+
+def _spline_path(entity, flatten: float, max_points: int) -> QPainterPath | None:
+    return _spline_path_from_points(spline_path_points(entity, flatten, max_points))
+
+
+def spline_path_points(entity, flatten: float, max_points: int) -> list[QPointF]:
+    from ezdxf import path as ezdxf_path
+
+    ez_path = ezdxf_path.make_path(entity)
+    verts = [QPointF(v.x, _dxf_y(v.y)) for v in ez_path.flattening(distance=flatten)]
+    return _subsample_points(verts, max_points)
+
+
+def entity_to_qpainter_path(
+    entity,
+    flatten: float,
+    *,
+    spline_max_points: int = _SPLINE_MAX_POINTS_DEFAULT,
+) -> QPainterPath | None:
     """Построить QPainterPath; для простых типов — без flatten."""
     dxftype = entity.dxftype()
     if dxftype == "LINE":
@@ -92,6 +138,8 @@ def entity_to_qpainter_path(entity, flatten: float) -> QPainterPath | None:
         return _circle_path(entity)
     if dxftype == "ARC":
         return _arc_path(entity)
+    if dxftype == "SPLINE":
+        return _spline_path(entity, flatten, spline_max_points)
 
     from ezdxf import path as ezdxf_path
 

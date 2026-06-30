@@ -178,19 +178,35 @@ def _nearest_on_segment(cursor: QPointF, a: QPointF, b: QPointF) -> QPointF:
 
 
 def _nearest_on_record(cursor: QPointF, record: EntityRecord) -> QPointF | None:
+    if record.pick_segments:
+        best = None
+        best_d = float("inf")
+        for seg_a, seg_b in record.pick_segments:
+            pt = _nearest_on_segment(cursor, seg_a, seg_b)
+            d = _dist(cursor, pt)
+            if d < best_d:
+                best_d = d
+                best = pt
+        return best
+
     path = record.path
     if path.isEmpty():
         return None
     best = None
     best_d = float("inf")
-    # Сэмплируем точки пути
-    poly = path.toFillPolygon()
-    for i in range(len(poly) - 1):
-        pt = _nearest_on_segment(cursor, poly[i], poly[i + 1])
-        d = _dist(cursor, pt)
-        if d < best_d:
-            best_d = d
-            best = pt
+    current: QPointF | None = None
+    for i in range(path.elementCount()):
+        el = path.elementAt(i)
+        if el.type == path.elementType().MoveToElement:
+            current = QPointF(el.x, el.y)
+        elif el.type == path.elementType().LineToElement and current is not None:
+            nxt = QPointF(el.x, el.y)
+            pt = _nearest_on_segment(cursor, current, nxt)
+            d = _dist(cursor, pt)
+            if d < best_d:
+                best_d = d
+                best = pt
+            current = nxt
     return best
 
 

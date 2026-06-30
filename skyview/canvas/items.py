@@ -83,12 +83,14 @@ class DxfPathItem(QGraphicsPathItem):
         return dist is not None and dist <= tol
 
     def pick_distance(self, scene_pos: QPointF) -> float | None:
+        if self.record.pick_segments:
+            dist = nearest_pick_distance(scene_pos, self.record.pick_segments)
+            if dist is not None:
+                return dist
         if self.record.analytic_pick:
             dist = pick_distance_to_entity(scene_pos, self.record.entity)
             if dist is not None:
                 return dist
-        if self.record.pick_segments:
-            return nearest_pick_distance(scene_pos, self.record.pick_segments)
         if self.shape().contains(scene_pos):
             return 0.0
         return None
