@@ -69,6 +69,7 @@ from skyview.tools.snap import SnapMode, SnapSettings
 from skyview.ui.about_dialog import AboutDialog
 from skyview.ui.properties_panel import PropertiesPanel
 from skyview.ui.snap_settings_dialog import SnapSettingsDialog
+from skyview.ui.tab_bar import MiddleClickTabBar
 from skyview.ui.update_dialog import ask_update
 from skyview.updater import (
     UpdateCheckThread,
@@ -172,6 +173,7 @@ class MainWindow(QMainWindow):
 
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._tabs = QTabWidget()
+        self._tabs.setTabBar(MiddleClickTabBar())
         self._tabs.setDocumentMode(True)
         self._tabs.setTabsClosable(True)
         self._tabs.setMovable(True)
@@ -180,6 +182,7 @@ class MainWindow(QMainWindow):
 
         self._properties = PropertiesPanel()
         self._properties.setMinimumWidth(0)
+        self._properties.property_edited.connect(self._on_property_edited)
 
         self._splitter.addWidget(self._tabs)
         self._splitter.addWidget(self._properties)
@@ -886,6 +889,21 @@ class MainWindow(QMainWindow):
                     self._properties.show_empty()
             else:
                 self._properties.show_empty()
+
+    def _on_property_edited(self, key: str, value: float) -> None:
+        canvas = self._active_canvas()
+        if canvas is None:
+            return
+        records = canvas.selected_records()
+        if len(records) != 1:
+            return
+        record = records[0]
+        if record.entity_type not in ("CIRCLE", "ARC"):
+            return
+        radius = value if key == "radius" else value / 2.0
+        if not canvas.set_entity_radius(record.handle, radius):
+            props = [r.get_properties() for r in canvas.selected_records()]
+            self._properties.show_properties(props)
 
     def _on_snap_info(self, text: str) -> None:
         if text:

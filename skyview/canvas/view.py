@@ -168,6 +168,9 @@ class DxfScene(QGraphicsScene):
         self._records_cache = None
         return removed
 
+    def invalidate_records_cache(self) -> None:
+        self._records_cache = None
+
     def items_at(self, scene_pos: QPointF, tol: float = 4.0) -> list[DxfPathItem]:
         rect = QRectF(
             scene_pos.x() - tol,
@@ -668,6 +671,31 @@ class DxfCanvas(QGraphicsView):
             self._emit_selection()
             self.document_modified.emit()
         return len(removed)
+
+    def set_entity_radius(self, handle: str, radius: float) -> bool:
+        if radius <= 0 or self._doc is None:
+            return False
+        item = self._scene.item_by_handle(handle)
+        if item is None:
+            return False
+        entity = item.record.entity
+        if entity.dxftype() not in ("CIRCLE", "ARC"):
+            return False
+
+        from skyview.dxf.loader import refresh_circular_record
+
+        entity.dxf.radius = radius
+        if not refresh_circular_record(item.record):
+            return False
+
+        item.set_viewport_detail(True)
+        item.setPath(item.record.path)
+        self._scene.invalidate_records_cache()
+        self._snap_engine.set_records(self._scene.all_records())
+        self._update_bounds_overlay()
+        self._emit_selection()
+        self.document_modified.emit()
+        return True
 
     def undo_delete(self) -> int:
         action = self._undo.pop_undo()

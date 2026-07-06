@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -15,8 +15,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from skyview.dxf.units import format_length
+from skyview.dxf.units import format_length, parse_length
 
+_ROLE_KEY = Qt.ItemDataRole.UserRole
+_ROLE_FORMATTED = Qt.ItemDataRole.UserRole + 1
+
+_EDITABLE_CIRCULAR = frozenset({"radius", "diameter"})
 
 PROP_LABELS: dict[str, str] = {
     "type": "Тип",
@@ -46,10 +50,14 @@ PROP_LABELS: dict[str, str] = {
 
 
 class PropertiesPanel(QFrame):
+    property_edited = Signal(str, float)
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("propertiesPanel")
         self._unit = "mm"
+        self._block_edits = False
+        self._editable_keys: set[str] = set()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -69,64 +77,110 @@ class PropertiesPanel(QFrame):
         self._table.setHorizontalHeaderLabels(["Свойство", "Значение"])
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.verticalHeader().setVisible(False)
-        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setEditTriggers(
+            QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+            | QTableWidget.EditTrigger.AnyKeyPressed
+        )
         self._table.setAlternatingRowColors(True)
         self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self._table.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self._table)
 
     def set_unit(self, unit: str) -> None:
         self._unit = unit
 
     def clear(self) -> None:
-        self._table.setRowCount(0)
-        self._count_label.setText("")
+        self._block_edits = True
+        try:
+            self._table.setRowCount(0)
+            self._count_label.setText("")
+            self._editable_keys.clear()
+        finally:
+            self._block_edits = False
 
     def show_empty(self) -> None:
         self.clear()
         self._count_label.setText("Ничего не выбрано")
 
     def show_bounding_size(self, width: float, height: float) -> None:
-        self._table.setRowCount(0)
-        self._count_label.setText("Габарит чертежа")
-        rows = [
-            ("Ширина", format_length(width, self._unit)),
-            ("Высота", format_length(height, self._unit)),
-        ]
-        self._table.setRowCount(len(rows))
-        for i, (label, value) in enumerate(rows):
-            self._table.setItem(i, 0, QTableWidgetItem(label))
-            item = QTableWidgetItem(value)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            self._table.setItem(i, 1, item)
+        self._block_edits = True
+        try:
+            self._table.setRowCount(0)
+            self._count_label.setText("Габарит чертежа")
+            self._editable_keys.clear()
+            rows = [
+                ("Ширина", format_length(width, self._unit)),
+                ("Высота", format_length(height, self._unit)),
+            ]
+            self._table.setRowCount(len(rows))
+            for i, (label, value) in enumerate(rows):
+                self._table.setItem(i, 0, QTableWidgetItem(label))
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self._table.setItem(i, 1, item)
+        finally:
+            self._block_edits = False
 
     def show_properties(self, records: list[dict[str, Any]]) -> None:
-        self._table.setRowCount(0)
-        if not records:
-            self._count_label.setText("Ничего не выбрано")
+        self._block_edits = True
+        try:
+            self._table.setRowCount(0)
+            self._editable_keys.clear()
+            if not records:
+                self._count_label.setText("Ничего не выбрано")
+                return
+
+            if len(records) == 1:
+                self._count_label.setText("")
+                props = records[0]
+                entity_type = props.get("type", "")
+                if entity_type in ("CIRCLE", "ARC"):
+                    self._editable_keys = set(_EDITABLE_CIRCULAR)
+            else:
+                self._count_label.setText(f"Выбрано: {len(records)}")
+                props = {"type": ", ".join(sorted({r.get("type", "") for r in records}))}
+                layers = {r.get("layer", "") for r in records}
+                if len(layers) == 1:
+                    props["layer"] = layers.pop()
+
+            rows = []
+            for key, value in props.items():
+                label = PROP_LABELS.get(key, key)
+                rows.append((key, label, self._format_value(key, value)))
+
+            self._table.setRowCount(len(rows))
+            for i, (key, label, value) in enumerate(rows):
+                self._table.setItem(i, 0, QTableWidgetItem(label))
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                item.setData(_ROLE_KEY, key)
+                item.setData(_ROLE_FORMATTED, value)
+                if key in self._editable_keys:
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                else:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._table.setItem(i, 1, item)
+        finally:
+            self._block_edits = False
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._block_edits or item.column() != 1:
             return
-
-        if len(records) == 1:
-            self._count_label.setText("")
-            props = records[0]
-        else:
-            self._count_label.setText(f"Выбрано: {len(records)}")
-            # Общие свойства для множественного выбора
-            props = {"type": ", ".join(sorted({r.get("type", "") for r in records}))}
-            layers = {r.get("layer", "") for r in records}
-            if len(layers) == 1:
-                props["layer"] = layers.pop()
-
-        rows = []
-        for key, value in props.items():
-            label = PROP_LABELS.get(key, key)
-            rows.append((label, self._format_value(key, value)))
-
-        self._table.setRowCount(len(rows))
-        for i, (label, value) in enumerate(rows):
-            self._table.setItem(i, 0, QTableWidgetItem(label))
-            item = QTableWidgetItem(value)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            self._table.setItem(i, 1, item)
+        key = item.data(_ROLE_KEY)
+        if key not in self._editable_keys:
+            return
+        value = parse_length(item.text(), self._unit)
+        if value is None:
+            self._block_edits = True
+            try:
+                formatted = item.data(_ROLE_FORMATTED)
+                if formatted:
+                    item.setText(formatted)
+            finally:
+                self._block_edits = False
+            return
+        self.property_edited.emit(str(key), value)
 
     def _format_value(self, key: str, value: Any) -> str:
         if value is None:

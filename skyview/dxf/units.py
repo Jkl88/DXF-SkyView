@@ -62,3 +62,23 @@ def format_length(value: float, unit: str, precision: int = 3) -> str:
     if unit:
         return f"{value:.{precision}f} {unit}"
     return f"{value:.{precision}f}"
+
+
+def parse_length(text: str, unit: str) -> float | None:
+    """Разобрать длину из поля свойств; единица в строке необязательна."""
+    raw = text.strip().replace(",", ".")
+    if not raw:
+        return None
+    if unit:
+        suffix = f" {unit}"
+        if raw.endswith(suffix):
+            raw = raw[: -len(suffix)].strip()
+        elif raw.endswith(unit):
+            raw = raw[: -len(unit)].strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return value

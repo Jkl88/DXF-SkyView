@@ -218,7 +218,19 @@ def _entity_properties(entity) -> dict[str, Any]:
     return props
 
 
-def _attach_path_lod(rec: EntityRecord, profile: LodProfile) -> None:
+def refresh_circular_record(record: EntityRecord) -> bool:
+    """Перестроить геометрию окружности/дуги после изменения радиуса."""
+    entity = record.entity
+    dxftype = entity.dxftype()
+    if dxftype not in ("CIRCLE", "ARC"):
+        return False
+    qp = entity_to_qpainter_path(entity, flatten=0.05)
+    if qp is None or qp.isEmpty():
+        return False
+    record.path = qp
+    record.bounds = entity_scene_bounds(entity) or qp.boundingRect()
+    record.properties = None
+    return True
     dxftype = rec.entity_type
     if dxftype == "SPLINE":
         return
