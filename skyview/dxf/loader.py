@@ -231,6 +231,9 @@ def refresh_circular_record(record: EntityRecord) -> bool:
     record.bounds = entity_scene_bounds(entity) or qp.boundingRect()
     record.properties = None
     return True
+
+
+def _attach_path_lod(rec: EntityRecord, profile: LodProfile) -> None:
     dxftype = rec.entity_type
     if dxftype == "SPLINE":
         return
