@@ -12,4 +12,19 @@ venv/
 .vscode/
 *.user
 .DS_Store
-Thumbs.db
+dist/
+build/
+*.spec.bak
+third_party/oda/download/
+third_party/oda/_extract/
+third_party/oda/extract/
+third_party/oda/ODAFileConverter/
+
+# Local AI / agent specs — never publish
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.cursor/
+.cursorrules
+.codex/
+.agents/
