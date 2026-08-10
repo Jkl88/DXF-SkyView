@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -21,11 +22,15 @@ _ROLE_KEY = Qt.ItemDataRole.UserRole
 _ROLE_FORMATTED = Qt.ItemDataRole.UserRole + 1
 
 _EDITABLE_CIRCULAR = frozenset({"radius", "diameter"})
+_SIMILAR_TYPES = frozenset({"LINE", "CIRCLE", "ARC"})
+_UNIQUE_KEYS = frozenset({"handle", "center", "start", "end", "location", "insert"})
+_FLOAT_TOL = 1e-6
 
 PROP_LABELS: dict[str, str] = {
     "type": "Тип",
     "layer": "Слой",
     "handle": "Handle",
+    "count": "Кол-во",
     "length": "Длина",
     "radius": "Радиус",
     "diameter": "Диаметр",
@@ -49,8 +54,53 @@ PROP_LABELS: dict[str, str] = {
 }
 
 
+def _values_equal(a: Any, b: Any) -> bool:
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        aa, bb = float(a), float(b)
+        return abs(aa - bb) <= _FLOAT_TOL * max(1.0, abs(aa), abs(bb))
+    if isinstance(a, tuple) and isinstance(b, tuple) and len(a) == len(b):
+        return all(_values_equal(x, y) for x, y in zip(a, b))
+    return a == b
+
+
+def common_properties(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Свойства с одинаковым значением у всех выбранных элементов."""
+    if not records:
+        return {}
+    if len(records) == 1:
+        return dict(records[0])
+
+    keys = [k for k in records[0] if k != "handle"]
+    result: dict[str, Any] = {}
+    for key in keys:
+        if not all(key in rec for rec in records):
+            continue
+        first = records[0][key]
+        if all(_values_equal(rec[key], first) for rec in records):
+            result[key] = first
+    return result
+
+
+def is_similar_entity(reference: dict[str, Any], other: dict[str, Any]) -> bool:
+    """Совпадение типа и геометрических размеров (без положения)."""
+    ref_type = reference.get("type")
+    if other.get("type") != ref_type:
+        return False
+    if ref_type == "LINE":
+        return _values_equal(reference.get("length"), other.get("length"))
+    if ref_type == "CIRCLE":
+        return _values_equal(reference.get("radius"), other.get("radius"))
+    if ref_type == "ARC":
+        return (
+            _values_equal(reference.get("radius"), other.get("radius"))
+            and _values_equal(reference.get("arc_length"), other.get("arc_length"))
+        )
+    return False
+
+
 class PropertiesPanel(QFrame):
     property_edited = Signal(str, float)
+    select_similar_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -87,6 +137,11 @@ class PropertiesPanel(QFrame):
         self._table.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self._table)
 
+        self._select_similar_btn = QPushButton("Выделить такие же")
+        self._select_similar_btn.setVisible(False)
+        self._select_similar_btn.clicked.connect(self.select_similar_requested.emit)
+        layout.addWidget(self._select_similar_btn)
+
     def set_unit(self, unit: str) -> None:
         self._unit = unit
 
@@ -96,6 +151,7 @@ class PropertiesPanel(QFrame):
             self._table.setRowCount(0)
             self._count_label.setText("")
             self._editable_keys.clear()
+            self._select_similar_btn.setVisible(False)
         finally:
             self._block_edits = False
 
@@ -109,6 +165,7 @@ class PropertiesPanel(QFrame):
             self._table.setRowCount(0)
             self._count_label.setText("Габарит чертежа")
             self._editable_keys.clear()
+            self._select_similar_btn.setVisible(False)
             rows = [
                 ("Ширина", format_length(width, self._unit)),
                 ("Высота", format_length(height, self._unit)),
@@ -129,23 +186,26 @@ class PropertiesPanel(QFrame):
             self._editable_keys.clear()
             if not records:
                 self._count_label.setText("Ничего не выбрано")
+                self._select_similar_btn.setVisible(False)
                 return
 
-            if len(records) == 1:
-                self._count_label.setText("")
-                props = records[0]
+            count = len(records)
+            self._count_label.setText(f"Выбрано: {count}" if count > 1 else "")
+
+            if count == 1:
+                props = dict(records[0])
                 entity_type = props.get("type", "")
                 if entity_type in ("CIRCLE", "ARC"):
                     self._editable_keys = set(_EDITABLE_CIRCULAR)
+                self._select_similar_btn.setVisible(entity_type in _SIMILAR_TYPES)
             else:
-                self._count_label.setText(f"Выбрано: {len(records)}")
-                props = {"type": ", ".join(sorted({r.get("type", "") for r in records}))}
-                layers = {r.get("layer", "") for r in records}
-                if len(layers) == 1:
-                    props["layer"] = layers.pop()
+                props = common_properties(records)
+                self._select_similar_btn.setVisible(False)
 
-            rows = []
+            rows: list[tuple[str, str, str]] = [("count", PROP_LABELS["count"], str(count))]
             for key, value in props.items():
+                if key in _UNIQUE_KEYS and count > 1:
+                    continue
                 label = PROP_LABELS.get(key, key)
                 rows.append((key, label, self._format_value(key, value)))
 

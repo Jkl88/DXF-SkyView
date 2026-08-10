@@ -183,6 +183,7 @@ class MainWindow(QMainWindow):
         self._properties = PropertiesPanel()
         self._properties.setMinimumWidth(0)
         self._properties.property_edited.connect(self._on_property_edited)
+        self._properties.select_similar_requested.connect(self._on_select_similar)
 
         self._splitter.addWidget(self._tabs)
         self._splitter.addWidget(self._properties)
@@ -889,6 +890,14 @@ class MainWindow(QMainWindow):
                     self._properties.show_empty()
             else:
                 self._properties.show_empty()
+
+    def _on_select_similar(self) -> None:
+        canvas = self._active_canvas()
+        if canvas is None:
+            return
+        count = canvas.select_similar()
+        if count:
+            self._status.showMessage(f"Выделено одинаковых: {count}")
 
     def _on_property_edited(self, key: str, value: float) -> None:
         canvas = self._active_canvas()

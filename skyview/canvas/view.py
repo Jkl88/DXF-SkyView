@@ -150,6 +150,14 @@ class DxfScene(QGraphicsScene):
             item.set_highlight(True)
             self._selected.add(item)
 
+    def set_selection(self, items: list[DxfPathItem]) -> None:
+        for sel in list(self._selected):
+            sel.set_highlight(False)
+        self._selected.clear()
+        for item in items:
+            item.set_highlight(True)
+            self._selected.add(item)
+
     def clear_selection(self) -> None:
         for sel in self._selected:
             sel.set_highlight(False)
@@ -306,6 +314,23 @@ class DxfCanvas(QGraphicsView):
 
     def remaining_records(self) -> list:
         return [item.record for item in self._scene.all_items()]
+
+    def select_similar(self) -> int:
+        """Выделить все элементы того же типа и размера, что и текущий."""
+        from skyview.ui.properties_panel import is_similar_entity
+
+        selected = self._scene.selected_items()
+        if len(selected) != 1:
+            return 0
+        reference = selected[0].record.get_properties()
+        matches = [
+            item
+            for item in self._scene.all_items()
+            if is_similar_entity(reference, item.record.get_properties())
+        ]
+        self._scene.set_selection(matches)
+        self._emit_selection()
+        return len(matches)
 
     def set_tool(self, tool: str) -> None:
         self._tool = tool
